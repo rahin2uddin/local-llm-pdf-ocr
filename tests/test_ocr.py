@@ -2,9 +2,17 @@
 
 from __future__ import annotations
 
+import asyncio
+from types import SimpleNamespace
+
+import pytest
+
 from pdf_ocr.core.ocr import (
     CROP_PROMPT,
     OLMOCR_PAGE_PROMPT,
+    LLMCallError,
+    ModelNotLoadedError,
+    OCRProcessor,
     _strip_runaway_repetition,
     _strip_yaml_front_matter,
 )
@@ -161,6 +169,111 @@ class TestHallucinationFilter:
             assert asyncio.run(ocr.perform_ocr_on_crop("ignored")) == "", (
                 f"variant {variant!r} should be dropped"
             )
+
+
+def _fake_models_client(model_ids=None, raise_exc=None):
+    """Build a stand-in for AsyncOpenAI exposing only `client.models.list()`.
+
+    Mirrors the SDK shape: ``await client.models.list()`` returns an object
+    with a ``.data`` attribute that's a list of objects each with an ``.id``.
+    """
+    async def _list():
+        if raise_exc is not None:
+            raise raise_exc
+        return SimpleNamespace(
+            data=[SimpleNamespace(id=m) for m in (model_ids or [])]
+        )
+    return SimpleNamespace(models=SimpleNamespace(list=_list))
+
+
+def _make_ocr_with_fake_client(model: str, fake_client) -> OCRProcessor:
+    """Construct an OCRProcessor without going through __init__ (which
+    would create a real AsyncOpenAI client). Same trick as
+    TestHallucinationFilter above."""
+    ocr = OCRProcessor.__new__(OCRProcessor)
+    ocr.api_base = "http://localhost:1234/v1"
+    ocr.model = model
+    ocr.client = fake_client
+    return ocr
+
+
+class TestEnsureModelLoaded:
+    """Pre-flight check that the requested model is loaded on the LLM
+    server. LM Studio silently falls back to whatever is loaded on
+    mismatch, so without this check users get bad OCR with no error
+    (issue #7)."""
+
+    def test_passes_when_model_in_loaded_list(self):
+        ocr = _make_ocr_with_fake_client(
+            "qwen/qwen3-vl-8b",
+            _fake_models_client(["qwen/qwen3-vl-8b", "allenai/olmocr-2-7b"]),
+        )
+        # No raise — exact match found.
+        asyncio.run(ocr.ensure_model_loaded())
+
+    def test_passes_case_insensitive(self):
+        # User passes "Qwen/Qwen3-VL-8B" but server returns "qwen/qwen3-vl-8b"
+        # — same model file, just shifted case. Don't make the user fight casing.
+        ocr = _make_ocr_with_fake_client(
+            "Qwen/Qwen3-VL-8B",
+            _fake_models_client(["qwen/qwen3-vl-8b"]),
+        )
+        asyncio.run(ocr.ensure_model_loaded())
+
+    def test_raises_with_helpful_message_on_mismatch(self):
+        # The exact scenario from the issue: user passed qwen3-vl-8b but
+        # LM Studio has olmocr loaded. Must surface this loudly.
+        ocr = _make_ocr_with_fake_client(
+            "qwen/qwen3-vl-8b",
+            _fake_models_client(["allenai_olmocr-2-7b-1025"]),
+        )
+        with pytest.raises(ModelNotLoadedError) as exc_info:
+            asyncio.run(ocr.ensure_model_loaded())
+
+        msg = str(exc_info.value)
+        # Must name the requested model (so the user knows what they asked for)…
+        assert "qwen/qwen3-vl-8b" in msg
+        # …and what the server actually has loaded (so they can either
+        # change --model or load the right one)…
+        assert "allenai_olmocr-2-7b-1025" in msg
+        # …and tell them about the escape hatch for non-LM-Studio servers.
+        assert "--no-verify-model" in msg
+        # …and explain WHY this matters (silent fallback) so they don't
+        # treat the check as a bug to disable and forget.
+        assert "silently" in msg.lower() or "fallback" in msg.lower()
+
+    def test_raises_with_none_listing_when_no_models_loaded(self):
+        # LM Studio with no model loaded at all. The error message
+        # should still be informative, not say "Loaded models: " followed
+        # by nothing (which reads like a parse error).
+        ocr = _make_ocr_with_fake_client(
+            "qwen/qwen3-vl-8b",
+            _fake_models_client([]),
+        )
+        with pytest.raises(ModelNotLoadedError) as exc_info:
+            asyncio.run(ocr.ensure_model_loaded())
+        assert "(none)" in str(exc_info.value)
+
+    def test_subclass_of_llm_call_error(self):
+        # Existing callers of LLMCallError (e.g. CLI's generic
+        # except-and-print path) must continue to catch this without
+        # special-casing.
+        assert issubclass(ModelNotLoadedError, LLMCallError)
+
+    def test_server_failure_wrapped_as_llm_call_error(self):
+        # If /v1/models fails (server down, wrong endpoint, auth error)
+        # surface a single-paragraph LLMCallError rather than the bare
+        # ConnectionError stack — match the diagnostic style of _chat.
+        ocr = _make_ocr_with_fake_client(
+            "qwen/qwen3-vl-8b",
+            _fake_models_client(raise_exc=ConnectionError("connection refused")),
+        )
+        with pytest.raises(LLMCallError) as exc_info:
+            asyncio.run(ocr.ensure_model_loaded())
+        # Must point the user at the server (where to look) and at the
+        # opt-out flag (how to bypass for non-conforming servers).
+        assert "http://localhost:1234/v1" in str(exc_info.value)
+        assert "--no-verify-model" in str(exc_info.value)
 
 
 class TestPromptConstants:

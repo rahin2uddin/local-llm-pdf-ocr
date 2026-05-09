@@ -24,6 +24,19 @@ class LLMCallError(RuntimeError):
     """
 
 
+class ModelNotLoadedError(LLMCallError):
+    """Raised when the requested model is not loaded on the LLM server.
+
+    LM Studio silently falls back to whatever model is currently loaded
+    when an OpenAI-compat client requests an unavailable model ID — so a
+    typo in --model or a forgotten model swap produces subtly wrong OCR
+    output with no surface error. This exception is raised by
+    :meth:`OCRProcessor.ensure_model_loaded` (and the grounded equivalent)
+    *before* any OCR work starts so the user sees the mismatch immediately
+    instead of debugging strange output later.
+    """
+
+
 # Canonical OlmOCR-2 prompt (the model was RL-trained on this exact string).
 # Source: github.com/allenai/olmocr olmocr/prompts/prompts.py
 # :func:`build_no_anchoring_v4_yaml_prompt`.
@@ -100,6 +113,25 @@ class OCRProcessor:
         self.api_base = api_base or os.getenv("LLM_API_BASE", "http://localhost:1234/v1")
         self.model = model or os.getenv("LLM_MODEL", "allenai/olmocr-2-7b")
         self.client = AsyncOpenAI(base_url=self.api_base, api_key="lm-studio")
+
+    async def ensure_model_loaded(self) -> None:
+        """Pre-flight check that ``self.model`` is loaded on the server.
+
+        Hits ``GET /v1/models`` via the OpenAI SDK and verifies the
+        configured model ID appears in the loaded list (case-insensitive).
+        Raises :class:`ModelNotLoadedError` on mismatch with a message
+        that names what's loaded and how to fix it. Wraps any underlying
+        transport / auth failure in :class:`LLMCallError`.
+
+        Why we do this: see :class:`ModelNotLoadedError`. Cheap call (one
+        GET, no inference); call once at pipeline startup before paying
+        for image conversion or detection.
+        """
+        loaded = await _list_loaded_model_ids(self.client, self.api_base)
+        if not _model_in_loaded(self.model, loaded):
+            raise ModelNotLoadedError(
+                _format_model_not_loaded(self.api_base, self.model, loaded)
+            )
 
     async def perform_ocr(self, image_base64: str) -> list[str]:
         """
@@ -222,6 +254,50 @@ def _strip_runaway_repetition(lines: list[str], max_repeat: int = 20) -> list[st
             truncated, worst[0][:60], worst[1],
         )
     return out
+
+
+async def _list_loaded_model_ids(client: AsyncOpenAI, api_base: str) -> list[str]:
+    """Return model IDs loaded on an OpenAI-compatible server.
+
+    Uses the SDK's ``client.models.list()`` (hits ``GET /v1/models``).
+    Wraps any transport / auth / response-shape failure in
+    :class:`LLMCallError` with the same diagnostic format ``_chat`` uses
+    so the caller sees a consistent error message style across the
+    pipeline's LLM-facing surfaces.
+    """
+    try:
+        page = await client.models.list()
+    except Exception as e:
+        raise LLMCallError(
+            f"Could not list models on {api_base}: "
+            f"{type(e).__name__}: {e}\n"
+            f"  - Is your local LLM server (LM Studio / Ollama / vLLM) running at "
+            f"{api_base}?\n"
+            f"  - Does it expose GET /v1/models? (Most do; some custom servers "
+            f"don't — pass --no-verify-model to skip this check.)"
+        ) from e
+    return [m.id for m in page.data]
+
+
+def _model_in_loaded(model: str, loaded: list[str]) -> bool:
+    target = model.lower()
+    return any(m.lower() == target for m in loaded)
+
+
+def _format_model_not_loaded(api_base: str, model: str, loaded: list[str]) -> str:
+    listing = "\n    ".join(loaded) if loaded else "(none)"
+    return (
+        f"Model {model!r} is not loaded on {api_base}.\n"
+        f"  Loaded models:\n    {listing}\n"
+        f"  Fix:\n"
+        f"    - Load {model!r} in LM Studio (Models -> search -> Load), then retry.\n"
+        f"    - Or pass --model with one of the loaded model IDs above.\n"
+        f"    - Or pass --no-verify-model to skip this check "
+        f"(e.g. on Ollama / vLLM, which auto-load on demand).\n"
+        f"  Why this matters: LM Studio silently falls back to whatever model is "
+        f"loaded when the requested one is missing, producing subtly wrong OCR "
+        f"results with no error. (issue #7)"
+    )
 
 
 def _strip_yaml_front_matter(text: str) -> str:

@@ -18,6 +18,7 @@ uv run main.py input.pdf --dense-threshold 40                 # auto-mode kicks 
 uv run main.py input.pdf --api-base http://localhost:11434/v1 --model glm-ocr:latest --max-image-dim 640   # Ollama + GLM-OCR
 uv run main.py input.pdf --grounded --model qwen/qwen3-vl-8b  # grounded path: bbox-native VLM, no Surya
 uv run main.py photo.avif                                     # AVIF input (native via Pillow ≥11.3)
+uv run main.py input.pdf --no-verify-model                    # skip pre-flight model check (Ollama / non-/v1/models servers)
 uv run main.py input.pdf -v                                   # verbose debug logging
 uv run uvicorn server:app --reload --port 8000                # web UI at http://localhost:8000
 ```
@@ -55,7 +56,12 @@ LLM endpoint is read from `.env` (or CLI overrides `--api-base` / `--model`). LM
 LLM_API_BASE=http://localhost:1234/v1
 LLM_MODEL=allenai/olmocr-2-7b
 OCR_CONCURRENCY=3          # server.py — async LLM concurrency
+OCR_VERIFY_MODEL=0         # server.py — opt out of pre-flight model check (default: on)
 ```
+
+### Pre-flight model verification (issue #7)
+
+Both entry points hit `GET /v1/models` before any OCR work to confirm the configured model is loaded, raising `ModelNotLoadedError` (subclass of `LLMCallError`) on mismatch. LM Studio otherwise silently falls back to whatever model is loaded, producing subtly wrong OCR with no error to flag the mismatch. Implementation lives on the backends — `OCRProcessor.ensure_model_loaded()` and `PromptedGroundedOCR.ensure_model_loaded()` — both reusing the same `_list_loaded_model_ids` / `_format_model_not_loaded` helpers in `core/ocr.py`. Disable per-call with CLI `--no-verify-model` or env `OCR_VERIFY_MODEL=0` (server only).
 
 ## Architecture
 

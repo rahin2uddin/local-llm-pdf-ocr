@@ -367,6 +367,31 @@ class PromptedGroundedOCR:
         self.max_tokens = max_tokens
         self.concurrency = concurrency
 
+    async def ensure_model_loaded(self) -> None:
+        """Pre-flight check that ``self.model`` is loaded on the server.
+
+        Mirrors :meth:`OCRProcessor.ensure_model_loaded` so users on
+        ``--grounded`` get the same fail-fast safety net. The grounded
+        path is in fact the path that originally surfaced this bug
+        (issue #7) — the user had OlmOCR loaded but requested Qwen3-VL,
+        and LM Studio silently served bad OCR from the wrong model.
+        """
+        from openai import AsyncOpenAI
+
+        from pdf_ocr.core.ocr import (
+            ModelNotLoadedError,
+            _format_model_not_loaded,
+            _list_loaded_model_ids,
+            _model_in_loaded,
+        )
+
+        client = AsyncOpenAI(base_url=self.api_base, api_key=self.api_key)
+        loaded = await _list_loaded_model_ids(client, self.api_base)
+        if not _model_in_loaded(self.model, loaded):
+            raise ModelNotLoadedError(
+                _format_model_not_loaded(self.api_base, self.model, loaded)
+            )
+
     async def ocr_document(
         self,
         pdf_path: str,

@@ -99,6 +99,11 @@ async def process_pdf(file: UploadFile = File(...), client_id: str = Form(...)):
         )
         concurrency = int(os.getenv("OCR_CONCURRENCY", 3))
 
+        # Fail fast on model mismatch (issue #7). Set OCR_VERIFY_MODEL=0 to
+        # skip if your server doesn't expose /v1/models.
+        if os.getenv("OCR_VERIFY_MODEL", "1") != "0":
+            await pipeline.ocr_processor.ensure_model_loaded()
+
         async def on_progress(stage, current, total, message):
             await manager.send_progress(client_id, message, stage_to_percent(stage, current, total))
 

@@ -78,7 +78,7 @@ graph TD
 
 1.  **Python 3.10+**
 2.  **A local OpenAI-compatible LLM server**. Any of:
-    -   **[LM Studio](https://lmstudio.ai)** — recommended default. Load `allenai/olmocr-2-7b` (hybrid path) or `qwen/qwen3-vl-8b` / `qwen/qwen2.5-vl-7b` (grounded path). Start the local server (default port `1234`).
+    -   **[LM Studio](https://lmstudio.ai)** — recommended default. Load `allenai/olmocr-2-7b` (hybrid path) or `qwen/qwen3-vl-8b` / `qwen/qwen2.5-vl-7b` (grounded path). Start the local server (default port `1234`). The CLI runs a pre-flight check that the requested model is actually loaded — LM Studio otherwise silently falls back to whatever model is loaded, producing subtly wrong OCR (issue #7). Use `--no-verify-model` to skip on servers that don't expose `/v1/models`.
     -   **[Ollama](https://ollama.com)** — pull `glm-ocr:latest` (requires `--max-image-dim 640`) or any vision model. Served at `http://localhost:11434/v1`.
     -   **vLLM / SGLang / any OpenAI-compatible endpoint**.
 
@@ -169,6 +169,7 @@ uv run local-llm-pdf-ocr input.pdf output_ocr.pdf
 | `--grounded`              | Use a bbox-native VLM that returns text + coordinates in one call (skips Surya, DP, refine). Requires a grounding-capable model via `--model`. |
 | `--api-base <url>`        | Override LLM API base URL                                             |
 | `--model <name>`          | Override LLM model name                                               |
+| `--no-verify-model`       | Skip the pre-flight check that `--model` is loaded on the server (issue #7). LM Studio otherwise silently falls back to whatever model is loaded; we hit `GET /v1/models` and fail fast on mismatch. Use on Ollama / vLLM (which auto-load), or any server that doesn't implement `/v1/models`. |
 
 **Examples**:
 

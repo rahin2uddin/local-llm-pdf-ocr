@@ -18,13 +18,17 @@ from pathlib import Path
 import fitz
 import pytest
 
+from types import SimpleNamespace
+
 from pdf_ocr.core.grounded import (
     GroundedBlock,
     GroundedResponse,
+    PromptedGroundedOCR,
     _parse_grounded_json,
     parse_glm_layout_details,
     parse_zai_response,
 )
+from pdf_ocr.core.ocr import LLMCallError, ModelNotLoadedError
 from pdf_ocr.core.pdf import PDFHandler
 from pdf_ocr.pipeline import OCRPipeline
 
@@ -421,3 +425,57 @@ class TestPromptedGroundedParser:
         raw = 'Here is the result:\n[{"bbox_2d":[0,0,10,10],"content":"x"}]'
         blocks = _parse_grounded_json(raw, page_idx=0, img_w=10, img_h=10)
         assert len(blocks) == 1
+
+
+class TestPromptedGroundedEnsureModelLoaded:
+    """Pre-flight model verification for the grounded path. Issue #7 was
+    actually filed against the grounded path specifically — user had
+    OlmOCR loaded but requested Qwen3-VL, and got OlmOCR's bad grounded
+    output instead of Qwen3-VL's good output."""
+
+    def _patch_openai(self, monkeypatch, model_ids=None, raise_exc=None):
+        async def _list():
+            if raise_exc is not None:
+                raise raise_exc
+            return SimpleNamespace(
+                data=[SimpleNamespace(id=m) for m in (model_ids or [])]
+            )
+
+        fake_client = SimpleNamespace(
+            models=SimpleNamespace(list=_list)
+        )
+
+        def _fake_async_openai(*args, **kwargs):
+            return fake_client
+
+        # ensure_model_loaded does `from openai import AsyncOpenAI` inside,
+        # so we patch the source module's attribute.
+        monkeypatch.setattr("openai.AsyncOpenAI", _fake_async_openai)
+        return fake_client
+
+    def test_passes_when_model_loaded(self, monkeypatch):
+        self._patch_openai(monkeypatch, model_ids=["qwen/qwen3-vl-8b"])
+        backend = PromptedGroundedOCR(
+            api_base="http://localhost:1234/v1",
+            model="qwen/qwen3-vl-8b",
+        )
+        asyncio.run(backend.ensure_model_loaded())  # no raise
+
+    def test_raises_on_mismatch_with_helpful_message(self, monkeypatch):
+        # The exact issue #7 scenario: requested grounded-capable Qwen3-VL,
+        # but LM Studio has the OlmOCR text-only model loaded.
+        self._patch_openai(monkeypatch, model_ids=["allenai_olmocr-2-7b-1025"])
+        backend = PromptedGroundedOCR(
+            api_base="http://localhost:1234/v1",
+            model="qwen/qwen3-vl-8b",
+        )
+        with pytest.raises(ModelNotLoadedError) as exc_info:
+            asyncio.run(backend.ensure_model_loaded())
+        msg = str(exc_info.value)
+        assert "qwen/qwen3-vl-8b" in msg
+        assert "allenai_olmocr-2-7b-1025" in msg
+        assert "--no-verify-model" in msg
+
+    def test_subclass_of_llm_call_error(self):
+        # Catchable via the same except-clause as other LLM failures.
+        assert issubclass(ModelNotLoadedError, LLMCallError)

@@ -85,7 +85,16 @@ Examples:
     )
     parser.add_argument("--api-base", help="Override LLM API base URL")
     parser.add_argument("--model", help="Override LLM model name")
-    parser.set_defaults(refine=True)
+    parser.add_argument(
+        "--no-verify-model", dest="verify_model", action="store_false",
+        help="Skip the pre-flight check that --model is loaded on the server. "
+             "By default we hit GET /v1/models and fail fast if the requested "
+             "model is missing — LM Studio otherwise silently falls back to "
+             "whatever model is loaded, producing subtly wrong OCR (issue #7). "
+             "Use this if your server doesn't implement /v1/models, or on "
+             "Ollama / vLLM (which auto-load on demand).",
+    )
+    parser.set_defaults(refine=True, verify_model=True)
     return parser
 
 
@@ -134,6 +143,21 @@ async def run(args: argparse.Namespace, console: Console) -> None:
         )
 
     output_path = resolve_output_path(args.input_pdf, args.output_pdf)
+
+    if args.verify_model:
+        # Fail fast on model mismatch BEFORE we pay for PDF rasterization
+        # or Surya detection. LM Studio's silent fallback (issue #7) is
+        # otherwise invisible until the user notices wrong OCR output.
+        # Print the error here too — main()'s outer except swallows the
+        # message and only exits 1, which would leave the user staring
+        # at a silent failure.
+        backend = pipeline.grounded_backend if args.grounded else pipeline.ocr_processor
+        try:
+            await backend.ensure_model_loaded()
+        except Exception as e:
+            console.print(f"[bold red]Error:[/bold red] {e}")
+            raise
+
     console.print(f"[bold cyan]Processing '{args.input_pdf}'...[/bold cyan]")
 
     progress = Progress(
