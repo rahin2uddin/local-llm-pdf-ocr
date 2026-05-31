@@ -1,4 +1,4 @@
-# only really looked to update the GUI from the original, some artifacting in readme and still links to  old github, not sure if i have updated everything correctly could someone smart have a look at it and improve?
+# only was really looking to update the GUI from the original, some artifacting in readme and still links to  old github, leaving as is to credit, everything but docker (you have to do that manually) installs with one click installer (this also starts the server in the background, when you click on the app the first time it takes awhile so give some time) Works Via openai endpoint test over local network, using 4070. Look to improve this could someone smart have a look at it?
 
 # 📄 Local LLM PDF OCR and Translator
 
