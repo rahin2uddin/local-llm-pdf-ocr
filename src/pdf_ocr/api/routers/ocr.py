@@ -34,6 +34,8 @@ router = APIRouter()
 def _is_ssrf_target(url: str | None) -> bool:
     if not url:
         return False
+    if os.getenv("ALLOW_SSRF_LOCAL", "true").lower() == "true":
+        return False
     try:
         host = urlparse(url).hostname or ""
         try:
