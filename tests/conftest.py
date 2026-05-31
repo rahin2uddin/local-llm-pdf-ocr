@@ -66,11 +66,11 @@ class _StubOCR:
         self.page_calls = 0
         self.crop_calls = 0
 
-    async def perform_ocr(self, image_base64: str) -> list[str]:
+    async def perform_ocr(self, image_base64: str, **kwargs) -> list[str]:
         self.page_calls += 1
         return list(self.page_lines)
 
-    async def perform_ocr_on_crop(self, image_base64: str) -> str:
+    async def perform_ocr_on_crop(self, image_base64: str, **kwargs) -> str:
         self.crop_calls += 1
         return self.crop_text
 

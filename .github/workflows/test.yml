@@ -27,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python: ["3.10", "3.13"]
+        python: ["3.11", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -38,6 +38,12 @@ jobs:
 
       - name: Sync deps (CLI + web extras)
         run: uv sync --extra web
+
+      - name: Run Ruff check
+        run: uv run ruff check src tests --no-fix
+
+      - name: Run Mypy type check
+        run: uv run mypy src
 
       - name: Run fast tests
         run: uv run pytest -m "not slow" -v

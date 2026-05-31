@@ -31,8 +31,9 @@ import json
 import logging
 import os
 import re
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
-from typing import Any, Awaitable, Callable, Optional, Protocol
+from typing import Any, Protocol
 
 from dotenv import load_dotenv
 
@@ -68,7 +69,7 @@ class GroundedOCRBackend(Protocol):
     async def ocr_document(
         self,
         pdf_path: str,
-        progress: Optional[ProgressCallback] = None,
+        progress: ProgressCallback | None = None,
     ) -> GroundedResponse: ...
 
 
@@ -246,9 +247,10 @@ class ZAIHostedOCR:
     async def ocr_document(
         self,
         pdf_path: str,
-        progress: Optional[ProgressCallback] = None,
+        progress: ProgressCallback | None = None,
     ) -> GroundedResponse:
         import asyncio
+
         import httpx
 
         headers = {"Authorization": f"Bearer {self.api_key}"}
@@ -357,9 +359,9 @@ class PromptedGroundedOCR:
         # Honor .env / environment overrides the same way OCRProcessor does,
         # so a user with `LLM_API_BASE` set in .env doesn't have to also pass
         # `--api-base` when switching to --grounded.
-        self.api_base = api_base or os.getenv("LLM_API_BASE", "http://localhost:1234/v1")
-        self.model = model or os.getenv("LLM_MODEL", "qwen/qwen3-vl-8b")
-        self.api_key = api_key
+        self.api_base: str = api_base or os.getenv("LLM_API_BASE") or "http://localhost:1234/v1"
+        self.model: str = model or os.getenv("LLM_MODEL") or "qwen/qwen3-vl-8b"
+        self.api_key: str = api_key
         self.max_image_dim = max_image_dim
         self.dpi = dpi
         self.prompt = prompt or DEFAULT_GROUNDING_PROMPT
@@ -395,11 +397,10 @@ class PromptedGroundedOCR:
     async def ocr_document(
         self,
         pdf_path: str,
-        progress: Optional[ProgressCallback] = None,
+        progress: ProgressCallback | None = None,
     ) -> GroundedResponse:
         import fitz
         from PIL import Image, ImageSequence
-        from openai import AsyncOpenAI
 
         from pdf_ocr.core.pdf import _is_image_path
 
@@ -432,16 +433,26 @@ class PromptedGroundedOCR:
 
         # 2. Call the VLM per page, streaming progress and isolating failures
         # so one bad page doesn't tank a multi-page document.
-        client = AsyncOpenAI(base_url=self.api_base, api_key=self.api_key, timeout=self.timeout_s)
+        import litellm
         sem = asyncio.Semaphore(max(1, self.concurrency))
         total_pages = len(page_imgs)
+
+        litellm_model = self.model
+        from pdf_ocr.utils.litellm_provider import resolve_custom_provider
+        custom_provider = resolve_custom_provider(litellm_model)
 
         async def run_one(page_idx: int) -> tuple[int, list[GroundedBlock]]:
             b64, w, h = page_imgs[page_idx]
             async with sem:
                 try:
-                    resp = await client.chat.completions.create(
-                        model=self.model, temperature=0.0, max_tokens=self.max_tokens,
+                    resp = await litellm.acompletion(
+                        model=litellm_model,
+                        custom_llm_provider=custom_provider,
+                        api_base=self.api_base,
+                        api_key=self.api_key,
+                        temperature=0.0,
+                        max_tokens=self.max_tokens,
+                        timeout=self.timeout_s,
                         messages=[{
                             "role": "user",
                             "content": [

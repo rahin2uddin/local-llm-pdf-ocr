@@ -27,7 +27,7 @@ from __future__ import annotations
 import asyncio
 import base64
 from collections import defaultdict
-from typing import Awaitable, Callable, Optional
+from collections.abc import Awaitable, Callable
 
 from pdf_ocr.core.grounded import GroundedOCRBackend
 from pdf_ocr.utils.image import crop_for_ocr
@@ -39,20 +39,23 @@ OutputWriter = Callable[[str, str, dict, int], None]
 def parse_page_range(page_str: str, total_pages: int) -> list[int]:
     """Parse a 1-indexed range like '1-3,5,7-9' into sorted 0-indexed pages."""
     pages: set[int] = set()
-    for part in page_str.split(","):
-        part = part.strip()
-        if not part:
-            continue
-        if "-" in part:
-            start_s, end_s = part.split("-", 1)
-            start, end = int(start_s), int(end_s)
-            for p in range(start, end + 1):
+    try:
+        for part in page_str.split(","):
+            part = part.strip()
+            if not part:
+                continue
+            if "-" in part:
+                start_s, end_s = part.split("-", 1)
+                start, end = int(start_s), int(end_s)
+                for p in range(start, end + 1):
+                    if 1 <= p <= total_pages:
+                        pages.add(p - 1)
+            else:
+                p = int(part)
                 if 1 <= p <= total_pages:
                     pages.add(p - 1)
-        else:
-            p = int(part)
-            if 1 <= p <= total_pages:
-                pages.add(p - 1)
+    except ValueError as e:
+        raise ValueError(f"Invalid page range syntax: '{page_str}'") from e
     return sorted(pages)
 
 
@@ -62,8 +65,8 @@ class OCRPipeline:
         aligner=None,
         ocr_processor=None,
         pdf_handler=None,
-        output_writer: Optional[OutputWriter] = None,
-        grounded_backend: Optional[GroundedOCRBackend] = None,
+        output_writer: OutputWriter | None = None,
+        grounded_backend: GroundedOCRBackend | None = None,
     ):
         """
         When `grounded_backend` is provided, `run()` skips Surya detection,
@@ -85,13 +88,18 @@ class OCRPipeline:
         output_path: str,
         *,
         dpi: int = 200,
-        pages: Optional[str] = None,
+        pages: str | None = None,
         concurrency: int = 1,
         refine: bool = True,
         max_image_dim: int = 1024,
         dense_threshold: int = 60,
         dense_mode: str = "auto",
-        progress: Optional[ProgressCallback] = None,
+        self_correction: bool = False,
+        binarize: bool = False,
+        dual_engine: bool = False,
+        spellcheck: str = "none",
+        cross_page: bool = False,
+        progress: ProgressCallback | None = None,
     ) -> dict[int, list[str]]:
         """
         Execute the full pipeline and return raw LLM text per processed page.
@@ -128,7 +136,14 @@ class OCRPipeline:
             )
 
         if self.grounded_backend is not None:
-            return await self._run_grounded(input_path, output_path, dpi=dpi, progress=progress)
+            return await self._run_grounded(
+                input_path,
+                output_path,
+                dpi=dpi,
+                spellcheck=spellcheck,
+                cross_page=cross_page,
+                progress=progress,
+            )
 
         if self.aligner is None or self.ocr_processor is None:
             raise ValueError(
@@ -150,10 +165,18 @@ class OCRPipeline:
 
         # --- Phase 1: batch layout detection ---
         await _notify(progress, "detect", 0, 1, f"Detecting layout for {len(page_nums)} pages...")
-        image_bytes = [base64.b64decode(images_dict[p]) for p in page_nums]
-        batch_boxes = await asyncio.to_thread(
-            self.aligner.get_detected_boxes_batch, image_bytes
-        )
+
+        batch_boxes = []
+        chunk_size = 10
+        for i in range(0, len(page_nums), chunk_size):
+            chunk_pages = page_nums[i:i + chunk_size]
+            chunk_bytes = [base64.b64decode(images_dict[p]) for p in chunk_pages]
+            chunk_boxes = await asyncio.to_thread(
+                self.aligner.get_detected_boxes_batch, chunk_bytes
+            )
+            batch_boxes.extend(chunk_boxes)
+            await _notify(progress, "detect", min(i + chunk_size, len(page_nums)), len(page_nums), f"Detecting layout ({min(i + chunk_size, len(page_nums))}/{len(page_nums)})...")
+
         pages_structured: dict[int, list] = {
             p: [(box, "") for box in batch_boxes[i]] for i, p in enumerate(page_nums)
         }
@@ -175,26 +198,35 @@ class OCRPipeline:
         total = len(page_nums)
 
         async def process_page(p_num: int):
-            if p_num in per_box_pages:
-                # _ocr_per_box manages its own concurrency by acquiring
-                # `semaphore` once per box. Wrapping the call in another
-                # `async with semaphore:` here would deadlock when
-                # concurrency=1 (outer holder waits for inner acquire).
-                aligned = await self._ocr_per_box(
-                    images_dict[p_num], pages_structured[p_num], semaphore
-                )
-                # No "raw lines" in per-box mode — each box's text IS the answer.
-                llm_lines = [t for _, t in aligned if t]
-                return p_num, llm_lines, aligned
-            async with semaphore:
-                llm_lines = await self.ocr_processor.perform_ocr(images_dict[p_num])
-                if llm_lines:
-                    aligned = await asyncio.to_thread(
-                        self.aligner.align_text, pages_structured[p_num], llm_lines
+            try:
+                if p_num in per_box_pages:
+                    # _ocr_per_box manages its own concurrency by acquiring
+                    # `semaphore` once per box. Wrapping the call in another
+                    # `async with semaphore:` here would deadlock when
+                    # concurrency=1 (outer holder waits for inner acquire).
+                    aligned = await self._ocr_per_box(
+                        images_dict[p_num], pages_structured[p_num], semaphore, self_correction, binarize, dual_engine
                     )
-                else:
-                    aligned = pages_structured[p_num]
-                return p_num, llm_lines, aligned
+                    # No "raw lines" in per-box mode — each box's text IS the answer.
+                    llm_lines = [t for _, t in aligned if t]
+                    return p_num, llm_lines, aligned
+                async with semaphore:
+                    llm_lines = await self.ocr_processor.perform_ocr(
+                        images_dict[p_num], self_correction=self_correction, binarize=binarize, dual_engine=dual_engine
+                    )
+                    if llm_lines:
+                        aligned = await asyncio.to_thread(
+                            self.aligner.align_text, pages_structured[p_num], llm_lines
+                        )
+                    else:
+                        aligned = pages_structured[p_num]
+                    return p_num, llm_lines, aligned
+            except Exception as e:
+                import logging
+                logging.warning(
+                    f"OCR failed for page {p_num}: {type(e).__name__}: {e}"
+                )
+                return p_num, [], pages_structured[p_num]
 
         completed = 0
         ocr_label = (
@@ -203,14 +235,17 @@ class OCRPipeline:
                  f"{total - len(per_box_pages)} sparse)"
         )
         await _notify(progress, "ocr", 0, total, f"{ocr_label} (0/{total})...")
-        for coro in asyncio.as_completed([process_page(p) for p in page_nums]):
-            p_num, llm_lines, aligned = await coro
-            pages_text[p_num] = llm_lines
-            pages_structured[p_num] = aligned
-            completed += 1
-            await _notify(
-                progress, "ocr", completed, total, f"{ocr_label} ({completed}/{total})"
-            )
+        async with asyncio.TaskGroup() as tg:
+            tasks = [tg.create_task(process_page(p)) for p in page_nums]
+            for coro in asyncio.as_completed(tasks):
+                p_num, llm_lines, aligned = await coro
+
+                pages_text[p_num] = llm_lines
+                pages_structured[p_num] = aligned
+                completed += 1
+                await _notify(
+                    progress, "ocr", completed, total, f"{ocr_label} ({completed}/{total})"
+                )
 
         # --- Phase 3: per-box crop re-OCR for low-confidence boxes ---
         # Skip refine for pages that already went through per-box OCR —
@@ -221,10 +256,21 @@ class OCRPipeline:
             }
             if sparse_structured:
                 await self._refine_uncertain(
-                    sparse_structured, images_dict, semaphore, progress
+                    sparse_structured, images_dict, semaphore, progress, self_correction, binarize, dual_engine
                 )
 
-        # --- Phase 4: write output ---
+        # --- Phase 4: post-processing (cross-page merge & spellcheck) ---
+        if cross_page:
+            self._cross_page_merge(pages_structured, page_nums)
+
+        if spellcheck and spellcheck != "none":
+            await self._run_spellcheck(pages_structured, page_nums, spellcheck)
+
+        # Update pages_text to reflect all Phase 3 & 4 post-processing (refine, spellcheck, cross-page merge)
+        for p in page_nums:
+            pages_text[p] = [text for _, text in pages_structured[p] if text.strip()]
+
+        # --- Phase 5: write output ---
         await _notify(progress, "embed", 0, 1, "Writing output...")
         await asyncio.to_thread(
             self.output_writer, input_path, output_path, pages_structured, dpi
@@ -238,7 +284,9 @@ class OCRPipeline:
         output_path: str,
         *,
         dpi: int,
-        progress: Optional[ProgressCallback],
+        spellcheck: str = "none",
+        cross_page: bool = False,
+        progress: ProgressCallback | None,
     ) -> dict[int, list[str]]:
         """
         Grounded path: the backend returns (bbox, text) pairs directly.
@@ -251,13 +299,24 @@ class OCRPipeline:
         directly so the user sees granular progress instead of a 0 → 100
         jump during multi-page grounded runs.
         """
+        assert self.grounded_backend is not None
         response = await self.grounded_backend.ocr_document(input_path, progress=progress)
 
         pages_data: dict[int, list] = defaultdict(list)
-        pages_text: dict[int, list[str]] = defaultdict(list)
         for block in response.blocks:
             pages_data[block.page_index].append((block.bbox, block.text))
-            pages_text[block.page_index].append(block.text)
+
+        page_nums = sorted(pages_data.keys())
+
+        if cross_page:
+            self._cross_page_merge(pages_data, page_nums)
+
+        if spellcheck and spellcheck != "none":
+            await self._run_spellcheck(pages_data, page_nums, spellcheck)
+
+        pages_text: dict[int, list[str]] = defaultdict(list)
+        for p in page_nums:
+            pages_text[p] = [text for _, text in pages_data[p] if text.strip()]
 
         await _notify(progress, "embed", 0, 1, "Writing output...")
         await asyncio.to_thread(
@@ -271,6 +330,9 @@ class OCRPipeline:
         image_b64: str,
         structured: list[tuple[list[float], str]],
         semaphore: asyncio.Semaphore,
+        self_correction: bool = False,
+        binarize: bool = False,
+        dual_engine: bool = False,
     ) -> list[tuple[list[float], str]]:
         """
         OCR every detected box on a page individually.
@@ -293,31 +355,44 @@ class OCRPipeline:
         Boxes that come back blank or filtered get an empty string.
         """
         async def ocr_one(idx: int, bbox: list[float]):
-            async with semaphore:
-                if not _is_refinable(bbox):
-                    return idx, ""
-                crop_b64 = await asyncio.to_thread(crop_for_ocr, image_b64, bbox)
-                if crop_b64 is None:
-                    return idx, ""
-                text = await self.ocr_processor.perform_ocr_on_crop(crop_b64)
-                return idx, text
+            try:
+                async with semaphore:
+                    if not _is_refinable(bbox):
+                        return idx, ""
+                    crop_b64 = await asyncio.to_thread(crop_for_ocr, image_b64, bbox)
+                    if crop_b64 is None:
+                        return idx, ""
+                    text = await self.ocr_processor.perform_ocr_on_crop(
+                        crop_b64, self_correction=self_correction, binarize=binarize, dual_engine=dual_engine
+                    )
+                    return idx, text
+            except Exception as e:
+                import logging
+                logging.warning(
+                    f"Dense OCR failed for box {idx}: {type(e).__name__}: {e}"
+                )
+                return idx, ""
 
-        tasks = [
-            asyncio.create_task(ocr_one(i, bbox))
-            for i, (bbox, _) in enumerate(structured)
-        ]
         results: dict[int, str] = {}
-        for fut in asyncio.as_completed(tasks):
-            idx, text = await fut
-            results[idx] = text.strip()
+        async with asyncio.TaskGroup() as tg:
+            tasks = [
+                tg.create_task(ocr_one(i, bbox))
+                for i, (bbox, _) in enumerate(structured)
+            ]
+            for fut in asyncio.as_completed(tasks):
+                idx, text = await fut
+                results[idx] = text.strip()
         return [(bbox, results.get(i, "")) for i, (bbox, _) in enumerate(structured)]
 
     async def _refine_uncertain(
         self,
-        pages_structured: dict[int, list],
+        sparse_structured: dict[int, list[tuple[list[float], str]]],
         images_dict: dict[int, str],
         semaphore: asyncio.Semaphore,
-        progress: Optional[ProgressCallback],
+        progress: ProgressCallback | None,
+        self_correction: bool = False,
+        binarize: bool = False,
+        dual_engine: bool = False,
     ) -> None:
         """
         Re-OCR boxes the DP aligner couldn't populate.
@@ -331,7 +406,7 @@ class OCRPipeline:
         the page-level OCR.
         """
         targets: list[tuple[int, int, list[float]]] = []
-        for p_num, aligned in pages_structured.items():
+        for p_num, aligned in sparse_structured.items():
             for idx, (bbox, text) in enumerate(aligned):
                 if not text.strip() and _is_refinable(bbox):
                     targets.append((p_num, idx, bbox))
@@ -343,34 +418,46 @@ class OCRPipeline:
         await _notify(progress, "refine", 0, total, f"Refining {total} uncertain boxes...")
 
         async def refine_one(p_num: int, idx: int, bbox: list[float]):
-            async with semaphore:
-                # crop_for_ocr decodes once and runs the blank check on
-                # the same padded crop the LLM would receive — returns
-                # None for near-uniform regions (notebook background,
-                # margins) so we skip the LLM call without polluting
-                # the text layer with the model's pangram fallback.
-                crop_b64 = await asyncio.to_thread(
-                    crop_for_ocr, images_dict[p_num], bbox
+            try:
+                async with semaphore:
+                    # crop_for_ocr decodes once and runs the blank check on
+                    # the same padded crop the LLM would receive — returns
+                    # None for near-uniform regions (notebook background,
+                    # margins) so we skip the LLM call without polluting
+                    # the text layer with the model's pangram fallback.
+                    crop_b64 = await asyncio.to_thread(
+                        crop_for_ocr, images_dict[p_num], bbox
+                    )
+                    if crop_b64 is None:
+                        return p_num, idx, ""
+                    text = await self.ocr_processor.perform_ocr_on_crop(
+                        crop_b64, self_correction=self_correction, binarize=binarize, dual_engine=dual_engine
+                    )
+                    return p_num, idx, text
+            except Exception as e:
+                import logging
+                logging.warning(
+                    f"Refine failed for page {p_num} box {idx}: {type(e).__name__}: {e}"
                 )
-                if crop_b64 is None:
-                    return p_num, idx, ""
-                text = await self.ocr_processor.perform_ocr_on_crop(crop_b64)
-                return p_num, idx, text
+                return p_num, idx, ""
 
         completed = 0
         refined_indices: dict[int, set[int]] = defaultdict(set)
-        for coro in asyncio.as_completed(
-            [refine_one(p, i, b) for p, i, b in targets]
-        ):
-            p_num, idx, text = await coro
-            bbox_cur, _ = pages_structured[p_num][idx]
-            pages_structured[p_num][idx] = (bbox_cur, text.strip())
-            refined_indices[p_num].add(idx)
-            completed += 1
-            await _notify(
-                progress, "refine", completed, total,
-                f"Refining boxes ({completed}/{total})",
-            )
+        async with asyncio.TaskGroup() as tg:
+            tasks = [
+                tg.create_task(refine_one(p, i, b))
+                for p, i, b in targets
+            ]
+            for coro in asyncio.as_completed(tasks):
+                p_num, idx, text = await coro
+                bbox_cur, _ = sparse_structured[p_num][idx]
+                sparse_structured[p_num][idx] = (bbox_cur, text.strip())
+                refined_indices[p_num].add(idx)
+                completed += 1
+                await _notify(
+                    progress, "refine", completed, total,
+                    f"Refining boxes ({completed}/{total})",
+                )
 
         # Post-refine dedup: refine sometimes produces text already present
         # in a vertically-nearby matched box, e.g. when Surya emits two
@@ -380,7 +467,67 @@ class OCRPipeline:
         # the same line twice, which surfaces as duplicated lines on
         # copy-paste from the output PDF.
         for p_num, idxs in refined_indices.items():
-            _drop_refined_duplicates(pages_structured[p_num], idxs)
+            _drop_refined_duplicates(sparse_structured[p_num], idxs)
+
+    def _cross_page_merge(
+        self,
+        pages_structured: dict[int, list[tuple[list[float], str]]],
+        page_nums: list[int],
+    ) -> None:
+        """
+        Post-processing step that inspects the end of each page and merges
+        trailing sentences without terminal punctuation into the first line of the
+        subsequent page.
+        """
+        for i in range(len(page_nums) - 1):
+            p1 = page_nums[i]
+            p2 = page_nums[i + 1]
+
+            p1_boxes = pages_structured.get(p1, [])
+            last_idx = -1
+            for idx in range(len(p1_boxes) - 1, -1, -1):
+                if p1_boxes[idx][1].strip():
+                    last_idx = idx
+                    break
+
+            p2_boxes = pages_structured.get(p2, [])
+            first_idx = -1
+            for idx in range(len(p2_boxes)):
+                if p2_boxes[idx][1].strip():
+                    first_idx = idx
+                    break
+
+            if last_idx != -1 and first_idx != -1:
+                last_bbox, last_text = p1_boxes[last_idx]
+                first_bbox, first_text = p2_boxes[first_idx]
+
+                last_text_stripped = last_text.strip()
+                # If the last box's text does not end with sentence-ending punctuation, merge them.
+                if last_text_stripped and last_text_stripped[-1] not in (".", "!", "?"):
+                    merged_text = last_text_stripped + " " + first_text.strip()
+                    p2_boxes[first_idx] = (first_bbox, merged_text)
+                    p1_boxes[last_idx] = (last_bbox, "")
+
+    async def _run_spellcheck(
+        self,
+        pages_structured: dict[int, list[tuple[list[float], str]]],
+        page_nums: list[int],
+        lang: str,
+    ) -> None:
+        """
+        Post-processing step that runs spelling auto-correction on each page.
+        """
+        from pdf_ocr.core.postprocess import DictionaryPostProcessor
+        processor = DictionaryPostProcessor(lang)
+        await processor.ensure_loaded()
+        for p in page_nums:
+            corrected = []
+            for bbox, text in pages_structured[p]:
+                if text:
+                    corrected.append((bbox, processor.correct_text(text)))
+                else:
+                    corrected.append((bbox, text))
+            pages_structured[p] = corrected
 
 
 # --- helpers ----------------------------------------------------------------
@@ -446,6 +593,6 @@ def _is_refinable(bbox: list[float]) -> bool:
     return width > 0.03 and height > 0.008
 
 
-async def _notify(cb: Optional[ProgressCallback], stage, current, total, message):
+async def _notify(cb: ProgressCallback | None, stage, current, total, message):
     if cb is not None:
         await cb(stage, current, total, message)

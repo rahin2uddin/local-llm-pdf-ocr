@@ -15,7 +15,6 @@ from pathlib import Path
 import fitz  # PyMuPDF
 from PIL import Image, ImageSequence
 
-
 IMAGE_EXTENSIONS = frozenset({
     ".jpg", ".jpeg", ".png", ".tif", ".tiff", ".bmp", ".webp", ".avif",
 })
@@ -64,8 +63,20 @@ class PDFHandler:
         doc = fitz.open(pdf_path)
         try:
             for page_num, page in enumerate(doc):
-                pix = page.get_pixmap(dpi=dpi)
-                img = Image.open(io.BytesIO(pix.tobytes("jpg", jpg_quality=50)))
+                # Cap DPI to prevent PyMuPDF OOM on massive pages (e.g. blueprints)
+                max_pixels = 25_000_000
+                page_area = page.rect.width * page.rect.height
+                page_pixels = page_area * (dpi / 72) ** 2
+                safe_dpi = dpi
+                if page_pixels > max_pixels:
+                    if page_area > 0:
+                        safe_dpi = int(72 * (max_pixels / page_area) ** 0.5)
+                        safe_dpi = max(72, min(dpi, safe_dpi))
+                    else:
+                        safe_dpi = 72
+
+                pix = page.get_pixmap(dpi=safe_dpi)
+                img = Image.frombytes("RGB", (pix.width, pix.height), pix.samples)
                 img.thumbnail((max_image_dim, max_image_dim))
 
                 buffer = io.BytesIO()
@@ -124,7 +135,19 @@ class PDFHandler:
                 width = old_page.rect.width
                 height = old_page.rect.height
 
-                pix = old_page.get_pixmap(dpi=dpi)
+                # Cap DPI to prevent PyMuPDF OOM on massive pages
+                max_pixels = 25_000_000
+                page_area = width * height
+                page_pixels = page_area * (dpi / 72) ** 2
+                safe_dpi = dpi
+                if page_pixels > max_pixels:
+                    if page_area > 0:
+                        safe_dpi = int(72 * (max_pixels / page_area) ** 0.5)
+                        safe_dpi = max(72, min(dpi, safe_dpi))
+                    else:
+                        safe_dpi = 72
+
+                pix = old_page.get_pixmap(dpi=safe_dpi)
                 img_data = pix.tobytes("jpg", jpg_quality=80)
 
                 new_page = new_doc.new_page(width=width, height=height)
@@ -308,8 +331,9 @@ class PDFHandler:
         # (minus a hairline margin so we don't butt up against neighbours).
         # scale_x > 1 stretches; scale_x < 1 compresses — both correctly
         # size the word's bounding box, which is what selection uses.
+        # We cap scale_x at 50.0 so impossibly thin boxes don't overflow the page.
         target_width = max(1.0, box_width * 0.98)
-        scale_x = target_width / natural_width
+        scale_x = min(50.0, target_width / natural_width)
 
         # Place baseline at box bottom, shifted up by the descender so tails
         # of "g"/"p"/"y" sit inside the box and the glyph tops land on the

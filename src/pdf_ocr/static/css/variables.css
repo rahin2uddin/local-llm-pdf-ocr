@@ -1,0 +1,95 @@
+:root {
+    /* Classical Parchment Palette */
+    --primary: #D4AF37; /* Gold Leaf */
+    --primary-hover: #C5A028;
+    --primary-glow: rgba(212, 175, 55, 0.15);
+    
+    --bg-main: #FFFBF5; /* Sun-drenched warm parchment */
+    --surface: rgba(255, 255, 255, 0.72); /* Translucent vellum sheet */
+    --surface-hover: rgba(255, 255, 255, 0.9);
+    --border: #E6DECF; /* Classic paper separator */
+    --border-gold: rgba(212, 175, 55, 0.35); /* Delicate gold foil stroke */
+    
+    --text-main: #2C241B; /* Rich Sepia / Ebony Charcoal */
+    --text-muted: #7F7663; /* Architectural dust */
+    
+    /* Semantic Colors */
+    --success-bg: rgba(46, 80, 35, 0.08);
+    --success-border: rgba(46, 80, 35, 0.2);
+    --success-text: #2E5023;
+    --error-bg: rgba(122, 42, 26, 0.06);
+    --error-border: rgba(122, 42, 26, 0.18);
+    --error-text: #7A2A1A;
+    --info-bg: rgba(28, 77, 86, 0.06);
+    --info-border: rgba(28, 77, 86, 0.18);
+    --info-text: #1C4D56;
+    
+    /* Layout Variables */
+    --radius-lg: 8px; /* Elegant book panels */
+    --radius-md: 4px; /* Restrained architectural corners */
+    --shadow-sm: 0 2px 8px rgba(44, 36, 27, 0.04);
+    --shadow-md: 0 6px 18px rgba(44, 36, 27, 0.07);
+    --shadow-lg: 0 16px 36px rgba(44, 36, 27, 0.1);
+    
+    /* Typography */
+    --font-body: 'DM Sans', 'Inter', sans-serif;
+    --font-heading: 'Playfair Display', serif;
+}
+
+[data-theme="dark"] {
+    /* Luxurious Deep Sepia Library Theme */
+    --bg-main: #1D1712; /* Deep dark leather-brown */
+    --surface: rgba(44, 36, 27, 0.65); /* Translucent dark vellum */
+    --surface-hover: rgba(58, 48, 36, 0.8);
+    --text-main: #FDFBF7; /* Warm creme text */
+    --text-muted: #A69888;
+    --border: #42372C;
+    --border-gold: rgba(212, 175, 55, 0.45);
+    
+    --success-bg: rgba(77, 120, 61, 0.15);
+    --success-border: rgba(77, 120, 61, 0.3);
+    --success-text: #C8E0B9;
+    --error-bg: rgba(163, 64, 48, 0.15);
+    --error-border: rgba(163, 64, 48, 0.3);
+    --error-text: #F5C6BA;
+    --info-bg: rgba(58, 124, 137, 0.15);
+    --info-border: rgba(58, 124, 137, 0.3);
+    --info-text: #BCE0E5;
+}
+
+* {
+    box-sizing: border-box;
+    transition: background-color 0.3s cubic-bezier(0.16, 1, 0.3, 1), 
+                color 0.3s cubic-bezier(0.16, 1, 0.3, 1), 
+                border-color 0.3s cubic-bezier(0.16, 1, 0.3, 1), 
+                box-shadow 0.3s cubic-bezier(0.16, 1, 0.3, 1),
+                transform 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+body {
+    margin: 0;
+    font-family: var(--font-body);
+    color: var(--text-main);
+    background-color: var(--bg-main);
+    background-image: 
+        radial-gradient(at 10% 10%, rgba(212, 175, 55, 0.05), transparent 450px),
+        radial-gradient(at 90% 90%, rgba(127, 118, 99, 0.04), transparent 600px),
+        url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='noise'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.04' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23noise)' opacity='0.015'/%3E%3C/svg%3E");
+    width: 100vw;
+    height: 100vh;
+    overflow: hidden;
+    box-sizing: border-box;
+}
+
+h1, h2, h3, h4, h5, h6 {
+    font-family: var(--font-heading);
+    margin: 0 0 1rem 0;
+    font-weight: 600;
+    letter-spacing: -0.015em;
+    color: var(--text-main);
+}
+
+.hidden {
+    display: none !important;
+}
+

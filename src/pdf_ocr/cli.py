@@ -11,6 +11,7 @@ import logging
 import os
 import sys
 from pathlib import Path
+from typing import Any
 
 from rich.console import Console
 from rich.progress import (
@@ -84,6 +85,7 @@ Examples:
              "a vision LLM that supports grounded output.",
     )
     parser.add_argument("--api-base", help="Override LLM API base URL")
+    parser.add_argument("--api-key", help="API Key for cloud LLM providers (e.g. litellm)")
     parser.add_argument("--model", help="Override LLM model name")
     parser.add_argument(
         "--no-verify-model", dest="verify_model", action="store_false",
@@ -119,7 +121,10 @@ async def run(args: argparse.Namespace, console: Console) -> None:
     # Lazy imports: heavy modules load AFTER argparse so --help stays fast.
     os.environ.setdefault("TQDM_DISABLE", "1")
     from pdf_ocr import (
-        HybridAligner, OCRPipeline, OCRProcessor, PDFHandler,
+        HybridAligner,
+        OCRPipeline,
+        OCRProcessor,
+        PDFHandler,
         PromptedGroundedOCR,
     )
 
@@ -129,6 +134,8 @@ async def run(args: argparse.Namespace, console: Console) -> None:
         backend_kwargs = {"max_image_dim": args.max_image_dim}
         if args.api_base:
             backend_kwargs["api_base"] = args.api_base
+        if args.api_key:
+            backend_kwargs["api_key"] = args.api_key
         if args.model:
             backend_kwargs["model"] = args.model
         pipeline = OCRPipeline(
@@ -138,11 +145,16 @@ async def run(args: argparse.Namespace, console: Console) -> None:
     else:
         pipeline = OCRPipeline(
             aligner=HybridAligner(),
-            ocr_processor=OCRProcessor(api_base=args.api_base, model=args.model),
+            ocr_processor=OCRProcessor(api_base=args.api_base, api_key=args.api_key, model=args.model),
             pdf_handler=pdf_handler,
         )
 
     output_path = resolve_output_path(args.input_pdf, args.output_pdf)
+
+    if args.verify_model:
+        is_cloud = args.model and (any(args.model.startswith(prefix) for prefix in ("openai/", "anthropic/", "gemini/", "deepseek/", "groq/", "vertex_ai/")) or (args.api_base and "api.openai.com" in args.api_base))
+        if is_cloud:
+            args.verify_model = False
 
     if args.verify_model:
         # Fail fast on model mismatch BEFORE we pay for PDF rasterization
@@ -151,7 +163,7 @@ async def run(args: argparse.Namespace, console: Console) -> None:
         # Print the error here too — main()'s outer except swallows the
         # message and only exits 1, which would leave the user staring
         # at a silent failure.
-        backend = pipeline.grounded_backend if args.grounded else pipeline.ocr_processor
+        backend: Any = pipeline.grounded_backend if args.grounded else pipeline.ocr_processor
         try:
             await backend.ensure_model_loaded()
         except Exception as e:
@@ -171,7 +183,7 @@ async def run(args: argparse.Namespace, console: Console) -> None:
     )
 
     with progress:
-        tasks: dict[str, int] = {}
+        tasks: dict[str, Any] = {}
 
         async def on_progress(stage: str, current: int, total: int, message: str) -> None:
             if stage not in tasks:

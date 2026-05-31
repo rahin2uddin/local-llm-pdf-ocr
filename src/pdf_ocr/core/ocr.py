@@ -6,11 +6,16 @@ endpoint works, including GLM OCR via Ollama — set LLM_API_BASE/LLM_MODEL or
 pass --api-base/--model).
 """
 
+import asyncio
 import logging
 import os
+import re
 
+import litellm
 from dotenv import load_dotenv
 from openai import AsyncOpenAI
+
+from pdf_ocr.utils.litellm_provider import resolve_custom_provider
 
 load_dotenv()
 
@@ -54,10 +59,54 @@ OLMOCR_PAGE_PROMPT = (
 
 # Prompt for cropped box regions — we want raw text only, no metadata
 # (the YAML front matter is nonsensical for a single line/region).
-CROP_PROMPT = (
-    "Transcribe the text in this image exactly as it appears. "
-    "Return only the plain text on a single line when possible, "
-    "with no metadata, no markdown, no formatting, no explanation."
+CROP_PROMPT = """
+You are a highly accurate OCR assistant.
+Extract all text from the provided image crop exactly as it appears.
+CRITICAL INSTRUCTION: Pay extremely close attention to all diacritical marks (e.g. Arabic Tashkeel, French accents, German umlauts). They are deliberate and must be transcribed accurately. Do not dismiss them as speckles or background noise.
+Output only the plain text with no markdown formatting or other commentary.
+"""
+
+DUAL_ENGINE_PAGE_PROMPT = """
+You are a highly accurate OCR assistant.
+Extract all text from the provided page image exactly as it appears.
+CRITICAL INSTRUCTION: Pay extremely close attention to all diacritical marks (e.g. Arabic Tashkeel, French accents, German umlauts). They are deliberate and must be transcribed accurately. Do not dismiss them as speckles or background noise.
+You are given a rough, error-prone draft transcription from a legacy OCR engine. Use it as a hint, but rely on the image for the final correct text, paying special attention to correcting hallucinations and diacritics in the draft.
+
+DRAFT HINT:
+{draft_text}
+
+Output only the corrected transcribed text, without any conversational formatting or commentary.
+"""
+
+DUAL_ENGINE_CROP_PROMPT = """
+You are a highly accurate OCR assistant.
+Extract all text from the provided image crop exactly as it appears.
+CRITICAL INSTRUCTION: Pay extremely close attention to all diacritical marks (e.g. Arabic Tashkeel, French accents, German umlauts). They are deliberate and must be transcribed accurately. Do not dismiss them as speckles or background noise.
+You are given a rough draft transcription from a legacy OCR engine. Use it as a hint, but rely on the image for the final correct text.
+
+DRAFT HINT:
+{draft_text}
+
+Output only the corrected transcribed text, without any conversational formatting or commentary.
+"""
+
+CORRECTION_PAGE_PROMPT = (
+    "Attached is an image of a document and a draft transcription. The draft may contain minor "
+    "errors such as missing diacritics, incorrect characters, or hallucinated words (especially in Arabic script). "
+    "Carefully compare the draft to the image and output the perfectly corrected text in the same format.\n"
+    "Draft Transcription:\n"
+    "---\n"
+    "{draft_text}\n"
+    "---\n"
+    "Please provide only the corrected transcription with no additional commentary."
+)
+
+CORRECTION_CROP_PROMPT = (
+    "Attached is an image of a cropped text region and a draft transcription. "
+    "Carefully compare the draft to the image and output the perfectly corrected text on a single line. "
+    "Fix any missing diacritics or incorrect characters (especially for Arabic script). "
+    "Output only the plain text with no explanation.\n"
+    "Draft Transcription: {draft_text}"
 )
 
 
@@ -109,10 +158,11 @@ class OCRProcessor:
     CROP_TIMEOUT_S: float = 60.0
     CROP_MAX_TOKENS: int = 256
 
-    def __init__(self, api_base: str | None = None, model: str | None = None):
-        self.api_base = api_base or os.getenv("LLM_API_BASE", "http://localhost:1234/v1")
-        self.model = model or os.getenv("LLM_MODEL", "allenai/olmocr-2-7b")
-        self.client = AsyncOpenAI(base_url=self.api_base, api_key="lm-studio")
+    def __init__(self, api_base: str | None = None, api_key: str | None = None, model: str | None = None):
+        self.api_base: str = api_base or os.getenv("LLM_API_BASE") or "http://localhost:1234/v1"
+        self.api_key: str = api_key or os.getenv("LLM_API_KEY") or "lm-studio"
+        self.model: str = model or os.getenv("LLM_MODEL") or "allenai/olmocr-2-7b"
+        self.client = AsyncOpenAI(base_url=self.api_base, api_key=self.api_key)
 
     async def ensure_model_loaded(self) -> None:
         """Pre-flight check that ``self.model`` is loaded on the server.
@@ -133,7 +183,7 @@ class OCRProcessor:
                 _format_model_not_loaded(self.api_base, self.model, loaded)
             )
 
-    async def perform_ocr(self, image_base64: str) -> list[str]:
+    async def perform_ocr(self, image_base64: str, self_correction: bool = False, binarize: bool = False, dual_engine: bool = False) -> list[str]:
         """
         OCR a full page image. Returns a list of non-empty lines in reading order.
 
@@ -143,30 +193,70 @@ class OCRProcessor:
         — this happens occasionally on dense handwritten pages even with
         max_tokens set, and pollutes downstream alignment with junk lines.
         """
+        if binarize:
+            image_base64 = await asyncio.to_thread(self._apply_adaptive_threshold, image_base64)
+
+        prompt = OLMOCR_PAGE_PROMPT
+        if dual_engine:
+            draft = await asyncio.to_thread(self._get_tesseract_draft, image_base64)
+            if draft:
+                prompt = DUAL_ENGINE_PAGE_PROMPT.replace("{draft_text}", draft)
+
         text = await self._chat(
-            OLMOCR_PAGE_PROMPT, image_base64,
+            prompt, image_base64,
             timeout=self.PAGE_TIMEOUT_S,
             max_tokens=self.PAGE_MAX_TOKENS,
         )
         if not text:
             return []
+
+        if self_correction:
+            correction_prompt = CORRECTION_PAGE_PROMPT.replace("{draft_text}", text)
+            text = await self._chat(
+                correction_prompt, image_base64,
+                timeout=self.PAGE_TIMEOUT_S,
+                max_tokens=self.PAGE_MAX_TOKENS,
+            )
+            if not text:
+                return []
+
         body = _strip_yaml_front_matter(text)
         lines = [line.strip() for line in body.split("\n") if line.strip()]
         return _strip_runaway_repetition(lines)
 
-    async def perform_ocr_on_crop(self, image_base64: str) -> str:
+    async def perform_ocr_on_crop(self, image_base64: str, self_correction: bool = False, binarize: bool = False, dual_engine: bool = False) -> str:
         """
         OCR a single cropped box region. Returns a single whitespace-joined
         string (the crop is small, so we don't try to preserve line structure).
         Empty-string for blank/uncertain crops (filtered hallucination).
         """
+        if binarize:
+            image_base64 = await asyncio.to_thread(self._apply_adaptive_threshold, image_base64)
+
+        prompt = CROP_PROMPT
+        if dual_engine:
+            draft = await asyncio.to_thread(self._get_tesseract_draft, image_base64)
+            if draft:
+                prompt = DUAL_ENGINE_CROP_PROMPT.replace("{draft_text}", draft)
+
         text = await self._chat(
-            CROP_PROMPT, image_base64,
+            prompt, image_base64,
             timeout=self.CROP_TIMEOUT_S,
             max_tokens=self.CROP_MAX_TOKENS,
         )
         if not text:
             return ""
+
+        if self_correction:
+            correction_prompt = CORRECTION_CROP_PROMPT.replace("{draft_text}", text)
+            text = await self._chat(
+                correction_prompt, image_base64,
+                timeout=self.CROP_TIMEOUT_S,
+                max_tokens=self.CROP_MAX_TOKENS,
+            )
+            if not text:
+                return ""
+
         body = _strip_yaml_front_matter(text)
         result = " ".join(line.strip() for line in body.split("\n") if line.strip())
         if _is_fallback_response(result):
@@ -181,13 +271,18 @@ class OCRProcessor:
         timeout: float,
         max_tokens: int,
     ) -> str:
+        litellm_model = self.model
+        custom_provider = resolve_custom_provider(litellm_model)
+
         try:
-            response = await self.client.with_options(
-                timeout=timeout
-            ).chat.completions.create(
-                model=self.model,
+            response = await litellm.acompletion(
+                model=litellm_model,
+                custom_llm_provider=custom_provider,
+                api_base=self.api_base,
+                api_key=self.api_key,
                 temperature=0.1,
                 max_tokens=max_tokens,
+                timeout=timeout,
                 messages=[
                     {
                         "role": "user",
@@ -205,17 +300,62 @@ class OCRProcessor:
             )
             return (response.choices[0].message.content or "").strip()
         except Exception as e:
+            err_msg = str(e)
+            if any(term in err_msg.lower() for term in ("context size", "context_length_exceeded", "context length")):
+                raise LLMCallError(
+                    f"LLM OCR call failed due to Context Size Limit. "
+                    f"Please load the model in LM Studio and increase the 'Context Length' in the right-side panel "
+                    f"to at least 8192 or 16384 tokens. "
+                    f"Underlying error: {e}"
+                ) from e
             raise LLMCallError(
                 f"LLM OCR call failed against {self.api_base} "
-                f"(model={self.model!r}): {type(e).__name__}: {e}\n"
-                f"  - Is your local LLM server (LM Studio / Ollama / vLLM) running at "
-                f"{self.api_base}?\n"
-                f"  - Is model {self.model!r} loaded and serving vision inputs?\n"
-                f"  - Did the model run away on this page? "
-                f"Try reducing --max-image-dim or capping the page complexity.\n"
-                f"  - Override endpoint with LLM_API_BASE / LLM_MODEL in .env, "
-                f"or pass --api-base / --model."
+                f"({type(e).__name__}): {e}"
             ) from e
+
+    def _get_tesseract_draft(self, image_base64: str) -> str:
+        try:
+            import base64
+            import io
+
+            import pytesseract
+            from PIL import Image
+
+            image_bytes = base64.b64decode(image_base64)
+            img = Image.open(io.BytesIO(image_bytes))
+            # Fallback to multiple common languages (or just Arabic/English for this workload)
+            draft = pytesseract.image_to_string(img, lang="ara+eng")
+            return draft.strip()
+        except Exception:
+            return ""
+
+    def _apply_adaptive_threshold(self, image_base64: str) -> str:
+        try:
+            import base64
+
+            import cv2
+            import numpy as np
+
+            image_bytes = base64.b64decode(image_base64)
+            np_arr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(np_arr, cv2.IMREAD_GRAYSCALE)
+
+            if img is None:
+                return image_base64
+
+            # Apply adaptive thresholding to extract ink cleanly
+            # Block size 21, constant 15 gives robust separation for handwriting
+            binary = cv2.adaptiveThreshold(
+                img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 15
+            )
+
+            success, encoded = cv2.imencode('.png', binary)
+            if not success:
+                return image_base64
+
+            return base64.b64encode(encoded.tobytes()).decode('utf-8')
+        except Exception:
+            return image_base64
 
 
 def _strip_runaway_repetition(lines: list[str], max_repeat: int = 20) -> list[str]:
@@ -304,9 +444,10 @@ def _strip_yaml_front_matter(text: str) -> str:
     """
     If the response begins with a YAML front matter block (--- ... ---),
     return the body after it. Otherwise return the input unchanged.
-    Robust to models that ignore the front-matter instruction.
+    Robust to models that ignore the front-matter instruction or wrap it
+    in markdown code fences.
     """
-    t = text.lstrip()
+    t = re.sub(r"^\s*```[a-zA-Z]*\n?", "", text).lstrip()
     if not t.startswith("---"):
         return text
     # Find the closing fence on its own line, after the opening fence.
@@ -315,5 +456,7 @@ def _strip_yaml_front_matter(text: str) -> str:
     if close_idx == -1:
         return text  # malformed; return as-is
     body = rest[close_idx + len("\n---"):]
+    # Remove optional closing ``` if it was part of a markdown fence
+    body = re.sub(r"^\s*```\n?", "", body)
     # Trim the newline directly after the closing fence.
     return body.lstrip("\n").strip()

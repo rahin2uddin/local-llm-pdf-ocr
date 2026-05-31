@@ -14,11 +14,10 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import fitz
 import pytest
-
-from types import SimpleNamespace
 
 from pdf_ocr.core.grounded import (
     GroundedBlock,
@@ -31,7 +30,6 @@ from pdf_ocr.core.grounded import (
 from pdf_ocr.core.ocr import LLMCallError, ModelNotLoadedError
 from pdf_ocr.core.pdf import PDFHandler
 from pdf_ocr.pipeline import OCRPipeline
-
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -263,7 +261,7 @@ class TestPromptedGroundedResilience:
     async def test_one_failing_page_does_not_lose_others(self, monkeypatch):
         # Build a fake PromptedGroundedOCR that renders 3 fake pages and makes
         # page 1 fail while pages 0 and 2 succeed.
-        from pdf_ocr.core.grounded import PromptedGroundedOCR, GroundedBlock
+        from pdf_ocr.core.grounded import PromptedGroundedOCR
 
         class _FakeClient:
             def __init__(self, *a, **kw):
@@ -284,7 +282,6 @@ class TestPromptedGroundedResilience:
                 return _Resp
 
         # Monkey-patch AsyncOpenAI inside grounded.py to return our fake.
-        import pdf_ocr.core.grounded as gm
 
         class _FakeAsyncOpenAI:
             def __init__(self, *a, **kw): pass
@@ -292,11 +289,13 @@ class TestPromptedGroundedResilience:
 
         monkeypatch.setattr("openai.AsyncOpenAI", _FakeAsyncOpenAI)
 
-        backend = PromptedGroundedOCR(max_image_dim=64, concurrency=1)
+        PromptedGroundedOCR(max_image_dim=64, concurrency=1)
 
         # Fake the page-rasterization step by pre-seeding page_imgs via monkey-
         # patching: replace fitz.open so we drive 3 synthetic pages.
-        import base64, io
+        import base64
+        import io
+
         from PIL import Image
         def _tiny_b64():
             buf = io.BytesIO()
@@ -309,8 +308,10 @@ class TestPromptedGroundedResilience:
             async def ocr_document(self, pdf_path, progress=None):
                 # Copy the live method but seed page_imgs directly.
                 self_ = self
-                from openai import AsyncOpenAI
                 import asyncio as _a
+
+                from openai import AsyncOpenAI
+
                 import pdf_ocr.core.grounded as _g
 
                 page_imgs = [(_tiny_b64(), 100, 100)] * 3

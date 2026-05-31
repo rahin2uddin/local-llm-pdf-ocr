@@ -8,22 +8,31 @@ Dependencies are managed with [`uv`](https://github.com/astral-sh/uv).
 
 ```bash
 uv sync                                                       # install/sync deps
-uv run main.py input.pdf [output.pdf]                         # CLI OCR (DP align + crop-refine, auto dense-mode)
-uv run main.py input.pdf --pages 1-3,5 --dpi 300              # page range + DPI
-uv run main.py input.pdf --concurrency 3                      # parallel LLM calls
-uv run main.py input.pdf --no-refine                          # skip crop re-OCR (faster, less robust)
-uv run main.py input.pdf --max-image-dim 640                  # smaller VLM context (needed for GLM-OCR:1.1B)
-uv run main.py input.pdf --dense-mode always --concurrency 5  # force per-box OCR every page (handwriting / dense)
-uv run main.py input.pdf --dense-threshold 40                 # auto-mode kicks in earlier (default 60 boxes/page)
-uv run main.py input.pdf --api-base http://localhost:11434/v1 --model glm-ocr:latest --max-image-dim 640   # Ollama + GLM-OCR
-uv run main.py input.pdf --grounded --model qwen/qwen3-vl-8b  # grounded path: bbox-native VLM, no Surya
-uv run main.py photo.avif                                     # AVIF input (native via Pillow ≥11.3)
-uv run main.py input.pdf --no-verify-model                    # skip pre-flight model check (Ollama / non-/v1/models servers)
-uv run main.py input.pdf -v                                   # verbose debug logging
-uv run uvicorn server:app --reload --port 8000                # web UI at http://localhost:8000
+uv run local-llm-pdf-ocr input.pdf [output.pdf]               # CLI OCR (DP align + crop-refine, auto dense-mode)
+uv run local-llm-pdf-ocr input.pdf --pages 1-3,5 --dpi 300   # page range + DPI
+uv run local-llm-pdf-ocr input.pdf --concurrency 3            # parallel LLM calls
+uv run local-llm-pdf-ocr input.pdf --no-refine                # skip crop re-OCR (faster, less robust)
+uv run local-llm-pdf-ocr input.pdf --max-image-dim 640        # smaller VLM context (needed for GLM-OCR:1.1B)
+uv run local-llm-pdf-ocr input.pdf --dense-mode always --concurrency 5  # force per-box OCR every page (handwriting / dense)
+uv run local-llm-pdf-ocr input.pdf --dense-threshold 40       # auto-mode kicks in earlier (default 60 boxes/page)
+uv run local-llm-pdf-ocr input.pdf --api-base http://localhost:11434/v1 --model glm-ocr:latest --max-image-dim 640   # Ollama + GLM-OCR
+uv run local-llm-pdf-ocr input.pdf --grounded --model qwen/qwen3-vl-8b  # grounded path: bbox-native VLM, no Surya
+uv run local-llm-pdf-ocr photo.avif                           # AVIF input (native via Pillow ≥11.3)
+uv run local-llm-pdf-ocr input.pdf --no-verify-model          # skip pre-flight model check (Ollama / non-/v1/models servers)
+uv run local-llm-pdf-ocr input.pdf -v                         # verbose debug logging
+uv run local-llm-pdf-ocr-server --port 8000                   # web UI at http://localhost:8000
 ```
 
 Debug/inspection tools live in `scripts/` (`visualize_bboxes.py`, `debug_alignment.py`, `verify_output.py`, `inspect_pdf.py`, etc.) and are run with `uv run scripts/<name>.py <args>`.
+
+## Gotchas
+
+- **Python ≥3.11** required. Deps managed with `uv`; do not use `pip install`.
+- **`pytest-asyncio` is in `auto` mode** — write `async def test_...` without decorators.
+- **Slow tests** (`-m slow`) download Surya models (~500MB) from HuggingFace on first run. Skip in quick iterations.
+- **Pillow override**: `uv` overrides surya's `pillow<11` pin to `>=11.3` for AVIF support. Do not remove the `[tool.uv] override-dependencies` block.
+- **`tqdm_patch.apply()`** must run *before* `from surya.detection import DetectionPredictor` in `aligner.py`. Removing it causes tqdm/Rich progress bar collisions.
+- **LM Studio must be running** (default `http://localhost:1234/v1`) for any real OCR. Tests stub the LLM.
 
 ### Tests
 
@@ -99,13 +108,21 @@ Local VLMs occasionally fall into runaway-generation loops on dense or unusual p
 
 `_chat` wraps any underlying exception in `LLMCallError` with a message naming the api-base + model so connection / model-not-loaded failures are diagnosable from the CLI output without a full stack trace.
 
+### Advanced Enhancements (MinerU-inspired)
+
+Recent additions allow the pipeline to reach 90%+ accuracy on difficult inputs (e.g., handwritten Arabic):
+- **Dual-Engine Consensus (`--dual-engine`)**: Runs `pytesseract` on the image first to generate a "Draft Hint". This draft is injected into the LLM prompt (`DUAL_ENGINE_PAGE_PROMPT`), acting as a strong anchor that eliminates hallucination and stabilizes diacritic placement.
+- **Dictionary Post-Processing (`--spellcheck <lang>`)**: Uses `pyspellchecker` to run a "safe auto-correction" pass on the final text. It uses regex word extraction and only replaces a typo if the dictionary yields exactly *one* highly-confident candidate, preventing unintended semantic changes.
+- **Cross-Page Paragraph Merging (`--cross-page`)**: A post-processing step (`OCRPipeline._cross_page_merge`) that inspects the end of each page and merges trailing sentences without terminal punctuation into the first line of the subsequent page.
+- **Handwriting Enhancement (`--binarize`)**: Applies OpenCV Adaptive Thresholding to the image crop *before* base64 encoding. This strips paper texture and shadows, turning faint marks (like Arabic Tashkeel) into high-contrast ink, forcing the VLM to recognize them. All prompts globally enforce preservation of diacritical marks.
+
 ### OlmOCR prompt / YAML parsing
 
 `OCRProcessor.perform_ocr` uses the canonical `build_no_anchoring_v4_yaml_prompt()` string from `olmocr.prompts` (the model is RL-trained on that exact prompt). Responses are markdown with YAML front matter (`primary_language`, `is_rotation_valid`, ...); `_strip_yaml_front_matter` removes the front matter before returning the body. `perform_ocr_on_crop` uses a distinct minimal prompt since per-region metadata is nonsensical.
 
 ### The orchestration seam: `src/pdf_ocr/pipeline.py`
 
-`OCRPipeline` is the single shared driver used by both `main.py` and `server.py`. Two execution paths:
+`OCRPipeline` is the single shared driver used by both `cli.py` and `server.py`. Two execution paths:
 
 - **Hybrid** (default): `convert → detect → ocr → refine → embed` — Surya gives boxes, LLM transcribes whole page, DP binds lines to boxes, crop re-OCR fills gaps. Per-page strategy: pages with ≤ `dense_threshold` boxes use full-page OCR; pages above the threshold (or all pages when `dense_mode="always"`) skip full-page and run per-box OCR via `_ocr_per_box`. Refine is only invoked for pages that took the full-page route.
 - **Grounded** (`grounded_backend=...`): `grounded → embed` — a bbox-native VLM (Qwen2.5-VL, Qwen3-VL, etc.) returns `(bbox, text)` pairs directly. Skips Surya, DP, and refine entirely. `src/pdf_ocr/core/grounded.py::PromptedGroundedOCR` is the default implementation; it rasterizes pages, calls the VLM with `DEFAULT_GROUNDING_PROMPT` (which explicitly demands one element per visual line so wrapped phrases stay separated), parses the JSON, normalizes pixel bboxes to 0..1. Honors `LLM_API_BASE` / `LLM_MODEL` from `.env` like `OCRProcessor` does.
@@ -126,7 +143,7 @@ async def progress(stage: str, current: int, total: int, message: str) -> None
 # stages: "convert" | "detect" | "ocr" | "refine" | "embed"
 ```
 
-The `"ocr"` stage label is suffixed with a dense/sparse split when both kinds of pages exist on a run (`OCR (3 dense / 17 sparse)`) so the user can see which pages took the per-box path. `main.py` maps this callback onto Rich progress tasks; `server.py` maps it onto WebSocket percent updates via `_STAGE_WEIGHTS`.
+The `"ocr"` stage label is suffixed with a dense/sparse split when both kinds of pages exist on a run (`OCR (3 dense / 17 sparse)`) so the user can see which pages took the per-box path. `cli.py` maps this callback onto Rich progress tasks; `server.py` maps it onto WebSocket percent updates via `_STAGE_WEIGHTS`.
 
 ### Core classes (`src/pdf_ocr/core/`)
 
@@ -144,12 +161,12 @@ The `"ocr"` stage label is suffixed with a dense/sparse split when both kinds of
 - In `embed_structured_text`, multi-line text in a box is treated as a full-page fallback block; single-line text is placed with `insert_text(point, render_mode=3)` (PyMuPDF maintainer-recommended for invisible OCR layers — `insert_textbox` mis-sizes single-line glyphs).
 
 ### Surya progress-bar silencing
-`src/pdf_ocr/utils/tqdm_patch.py` is applied at the top of `aligner.py` (`tqdm_patch.apply()`) to stop Surya's internal tqdm bars from colliding with Rich. Do not remove this import — it must run before `from surya.detection import DetectionPredictor`. `main.py` also sets `TQDM_DISABLE=1` via `os.environ.setdefault` before the lazy import path loads Surya.
+`src/pdf_ocr/utils/tqdm_patch.py` is applied at the top of `aligner.py` (`tqdm_patch.apply()`) to stop Surya's internal tqdm bars from colliding with Rich. Do not remove this import — it must run before `from surya.detection import DetectionPredictor`. `cli.py` also sets `TQDM_DISABLE=1` via `os.environ.setdefault` before the lazy import path loads Surya.
 
 ### Entry points
 
-- **`main.py`** — argparse + lazy imports of heavy modules (Surya, PyMuPDF) so `--help` stays fast; wires a Rich progress adapter into `OCRPipeline`.
-- **`server.py`** — FastAPI with `POST /process`, `GET /text/{job_id}`, `WS /ws/{client_id}`. The WebSocket is for live progress; the pipeline callback is translated to a single 0-100 percent via `_STAGE_WEIGHTS`.
+- **`src/pdf_ocr/cli.py`** — argparse + lazy imports of heavy modules (Surya, PyMuPDF) so `--help` stays fast; wires a Rich progress adapter into `OCRPipeline`. Entry point: `local-llm-pdf-ocr` console script.
+- **`src/pdf_ocr/server.py`** — FastAPI application wrapper with routers included from `src/pdf_ocr/api/routers/` (`POST /process`, `GET /text/{job_id}`, `WS /ws/{client_id}`). The WebSocket is for live progress; the pipeline callback is translated to a single 0-100 percent via `_STAGE_WEIGHTS`.
 
 ### Extension points
 

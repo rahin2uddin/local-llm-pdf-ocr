@@ -3,7 +3,7 @@ name = "local-llm-pdf-ocr"
 version = "0.1.0"
 description = "Transform scanned and written documents into fully searchable, selectable PDFs using the power of Local LLM Vision"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = { file = "LICENSE" }
 authors = [
     { name = "Ahnaf An Nafee", email = "ahnafnafee@gmail.com" },
@@ -13,7 +13,6 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
@@ -31,18 +30,26 @@ dependencies = [
     "torch>=2.0.0",
     "torchvision>=0.15.0",
     "opencv-python-headless>=4.8.0",
+    "litellm>=1.35.0",
     # surya 0.17.x imports `requests` in surya/common/s3.py but doesn't
     # declare it. Newer huggingface-hub (≥1.0) no longer pulls it in
     # transitively, so a clean `pip install local-llm-pdf-ocr` would crash on
     # the first Surya import. Listed here until surya fixes it upstream.
     "requests>=2.31",
+    "pyspellchecker>=0.8.1",
+    "celery>=5.4.0",
+    "redis>=5.0.0",
+    "langchain>=0.2.0",
+    "langgraph>=0.1.0",
+    "chromadb>=0.5.0",
+    "sentence-transformers>=5.5.1",
 ]
 
 [project.optional-dependencies]
 web = [
     "fastapi>=0.124.4",
     "uvicorn>=0.38.0",
-    "websockets>=15.0.1",
+    "websockets>=10.0,<14.0",
     "python-multipart>=0.0.20",
 ]
 
@@ -74,6 +81,8 @@ include = [
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
+    "ruff>=0.3.0",
+    "mypy>=1.9.0",
 ]
 
 [tool.uv]
@@ -97,3 +106,33 @@ markers = [
 filterwarnings = [
     "ignore::pydantic.PydanticDeprecatedSince20:surya.*",
 ]
+
+[tool.ruff]
+line-length = 88
+target-version = "py310"
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+]
+ignore = [
+    "E501", # line too long (handled by formatter)
+    "B008", # do not perform function calls in argument defaults (standard in FastAPI)
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+strict_equality = true
+extra_checks = true
+check_untyped_defs = true
+ignore_missing_imports = true
+

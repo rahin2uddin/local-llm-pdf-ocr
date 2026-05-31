@@ -104,10 +104,10 @@ def test_end_to_end_pipeline_produces_searchable_pdf(
             # Skip real init (no LLM client needed).
             pass
 
-        async def perform_ocr(self, image_base64):
+        async def perform_ocr(self, image_base64, **kwargs):
             return list(marker_lines)
 
-        async def perform_ocr_on_crop(self, image_base64):
+        async def perform_ocr_on_crop(self, image_base64, **kwargs):
             return "ZZCROPMARKER"
 
     input_pdf = str(example_pdfs[name])
@@ -139,9 +139,9 @@ def test_end_to_end_with_page_filter(
     """--pages 1 should produce an output whose page 0 is searchable."""
     class _Stub(OCRProcessor):
         def __init__(self): pass
-        async def perform_ocr(self, image_base64):
+        async def perform_ocr(self, image_base64, **kwargs):
             return ["ZZONLYPAGEONE marker", "second line"]
-        async def perform_ocr_on_crop(self, image_base64):
+        async def perform_ocr_on_crop(self, image_base64, **kwargs):
             return "ZZCROP"
 
     input_pdf = str(example_pdfs["digital.pdf"])
@@ -221,13 +221,13 @@ def test_dp_placement_is_monotonic_on_real_boxes(
     # For each tag, find the first box index it appears in.
     first_box = {}
     for box_idx, (_, text) in enumerate(aligned):
-        for i, line in enumerate(lines):
+        for i, _line in enumerate(lines):
             tag = f"TAG{i:02d}"
             if tag in text and i not in first_box:
                 first_box[i] = box_idx
 
     placed = sorted(first_box.keys())
-    for a, b in zip(placed, placed[1:]):
+    for a, b in zip(placed, placed[1:], strict=False):
         assert first_box[a] <= first_box[b], (
             f"{name}: reading-order violation — TAG{a:02d} landed in box "
             f"{first_box[a]} but TAG{b:02d} in earlier box {first_box[b]}"
@@ -260,9 +260,9 @@ def test_embedded_text_positionally_matches_aligned_boxes(
 
     class _Stub(OCRProcessor):
         def __init__(self): pass
-        async def perform_ocr(self, image_base64):
+        async def perform_ocr(self, image_base64, **kwargs):
             return list(lines)
-        async def perform_ocr_on_crop(self, image_base64):
+        async def perform_ocr_on_crop(self, image_base64, **kwargs):
             return "REFINED"
 
     input_pdf = str(example_pdfs[name])
@@ -369,10 +369,10 @@ def test_hybrid_form_no_consecutive_duplicate_lines(
         def __init__(self):
             self._refine_counter = 0
 
-        async def perform_ocr(self, image_base64):
+        async def perform_ocr(self, image_base64, **kwargs):
             return list(stub_lines)
 
-        async def perform_ocr_on_crop(self, image_base64):
+        async def perform_ocr_on_crop(self, image_base64, **kwargs):
             # Each refine call returns a unique token so two refined
             # boxes can't accidentally produce identical adjacent lines
             # in the test (which would be a false positive — the bug
