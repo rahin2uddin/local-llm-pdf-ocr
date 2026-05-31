@@ -1,4 +1,6 @@
-# 📄 Local LLM PDF OCR
+# only really looked to update the GUI from the original, some artifacting in readme and still links to  old github, not sure if i have updated everything correctly could someone smart have a look at it and improve?
+
+# 📄 Local LLM PDF OCR and Translator
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Modern-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
