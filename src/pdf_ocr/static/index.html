@@ -1,342 +1,848 @@
 <!DOCTYPE html>
-<html lang="en">
-    <head>
-        <meta charset="UTF-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Local LLM PDF OCR</title>
+<html lang="en" data-theme="dark">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DocuVerse - AI OCR, Translation & Data Extraction Station</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Outfit:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="/static/style.css?v=3">
+    
+    <style>
+        /* Modern AI Workstation Layout overrides */
+        :root {
+            --font-serif: 'Outfit', sans-serif;
+            --font-sans: 'Inter', sans-serif;
+            
+            /* Curated dark mode color palette */
+            --bg-main: #0B0F19;
+            --surface: rgba(17, 24, 39, 0.7);
+            --surface-hover: rgba(31, 41, 55, 0.85);
+            --border: rgba(255, 255, 255, 0.08);
+            --border-hover: rgba(139, 92, 246, 0.4);
+            --text-main: #F3F4F6;
+            --text-muted: #9CA3AF;
+            --primary: #8B5CF6;
+            --primary-glow: rgba(139, 92, 246, 0.35);
+            --secondary: #06B6D4;
+            --success: #10B981;
+            --error: #EF4444;
+            
+            --glass-bg: rgba(17, 24, 39, 0.45);
+            --glass-blur: blur(16px);
+            --radius-lg: 12px;
+            --radius-md: 8px;
+            --radius-sm: 4px;
+            --shadow-lg: 0 10px 30px -10px rgba(0, 0, 0, 0.5), 0 1px 1px rgba(255,255,255,0.05);
+            --shadow-sm: 0 4px 6px -1px rgba(0, 0, 0, 0.1);
+        }
 
-        <!-- Fonts -->
-        <link rel="preconnect" href="https://fonts.googleapis.com" />
-        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-        <link
-            href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=Outfit:wght@500;700&display=swap"
-            rel="stylesheet"
-        />
+        body {
+            font-family: var(--font-sans);
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background-image: 
+                radial-gradient(at 0% 0%, rgba(139, 92, 246, 0.12) 0px, transparent 50%),
+                radial-gradient(at 100% 0%, rgba(6, 182, 212, 0.1) 0px, transparent 50%);
+        }
 
-        <link rel="stylesheet" href="/static/style.css" />
-    </head>
-    <body>
-        <div class="theme-toggle">
-            <button
-                id="theme-btn"
-                class="btn"
-                style="
-                    padding: 0.5rem;
-                    background: transparent;
-                    border: none;
-                    cursor: pointer;
-                    color: var(--text-main);
-                "
-            >
-                <svg
-                    id="moon-icon"
-                    width="20"
-                    height="20"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                >
-                    <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z"
-                    ></path>
-                </svg>
-                <svg
-                    id="sun-icon"
-                    class="hidden"
-                    width="20"
-                    height="20"
-                    fill="none"
-                    stroke="currentColor"
-                    viewBox="0 0 24 24"
-                >
-                    <path
-                        stroke-linecap="round"
-                        stroke-linejoin="round"
-                        stroke-width="2"
-                        d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z"
-                    ></path>
-                </svg>
-            </button>
-        </div>
+        /* Ambient Glow */
+        .ambient-glow {
+            position: absolute;
+            width: 300px;
+            height: 300px;
+            border-radius: 50%;
+            filter: blur(120px);
+            z-index: -1;
+            pointer-events: none;
+            opacity: 0.4;
+        }
+        .glow-1 {
+            top: 10%;
+            left: 20%;
+            background: var(--primary);
+        }
+        .glow-2 {
+            bottom: 10%;
+            right: 20%;
+            background: var(--secondary);
+        }
 
-        <div class="container">
-            <div class="brand">
-                <h1>Local LLM PDF OCR</h1>
-                <p>Enhance your documents with local LLM vision.</p>
-            </div>
+        /* Grid Framework for the 3-column Workstation */
+        .workstation-container {
+            display: grid;
+            grid-template-columns: 330px 1fr 440px;
+            height: 100vh;
+            overflow: hidden;
+        }
 
-            <!-- Upload View -->
-            <div id="upload-view">
-                <div class="drop-zone" id="drop-zone">
-                    <div class="drop-content">
-                        <svg
-                            class="icon-upload"
-                            fill="none"
-                            stroke="currentColor"
-                            viewBox="0 0 24 24"
-                        >
-                            <path
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                                stroke-width="1.5"
-                                d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"
-                            ></path>
-                        </svg>
-                        <div>
-                            <span
-                                style="
-                                    font-weight: 600;
-                                    color: var(--text-main);
-                                "
-                                >Click to upload</span
-                            >
-                            <span style="color: var(--text-muted)"
-                                >or drag PDF here</span
-                            >
-                        </div>
-                    </div>
-                    <input
-                        type="file"
-                        id="file-input"
-                        accept="application/pdf"
-                        hidden
-                    />
+        /* Column 1: Workspace controls & upload */
+        .left-control-panel {
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            border-right: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow-y: auto;
+            padding: 1.25rem;
+            gap: 1.25rem;
+            box-shadow: var(--shadow-sm);
+        }
+
+        /* Column 2: central visual viewport */
+        .central-viewport {
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            background: rgba(0, 0, 0, 0.2);
+            position: relative;
+        }
+
+        /* Column 3: AI tabbed workstations */
+        .right-ai-panel {
+            background: var(--glass-bg);
+            backdrop-filter: var(--glass-blur);
+            border-left: 1px solid var(--border);
+            display: flex;
+            flex-direction: column;
+            overflow: hidden;
+            box-shadow: var(--shadow-sm);
+        }
+
+        /* Premium Header */
+        .wk-header {
+            height: 56px;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 0 1.25rem;
+            border-bottom: 1px solid var(--border);
+            background: rgba(17, 24, 39, 0.4);
+            backdrop-filter: var(--glass-blur);
+            flex-shrink: 0;
+        }
+        .header-brand {
+            display: flex;
+            align-items: center;
+            gap: 0.75rem;
+        }
+        .logo-text {
+            font-family: var(--font-serif);
+            font-size: 1.35rem;
+            font-weight: 700;
+            background: linear-gradient(135deg, #F3F4F6 30%, #8B5CF6 100%);
+            -webkit-background-clip: text;
+            -webkit-text-fill-color: transparent;
+            letter-spacing: -0.02em;
+        }
+        .tagline {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            padding: 0.15rem 0.5rem;
+            border-radius: 99px;
+            background: rgba(255, 255, 255, 0.05);
+            border: 1px solid var(--border);
+        }
+
+        /* Upload area styling */
+        .drop-zone-premium {
+            border: 2px dashed var(--border);
+            border-radius: var(--radius-lg);
+            padding: 1.5rem;
+            text-align: center;
+            background: rgba(255, 255, 255, 0.01);
+            transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1);
+            cursor: pointer;
+            position: relative;
+            overflow: hidden;
+        }
+        .drop-zone-premium:hover, .drop-zone-premium.dragover {
+            border-color: var(--primary);
+            background: rgba(139, 92, 246, 0.03);
+            box-shadow: 0 0 15px var(--primary-glow);
+        }
+
+        /* File Info Display card */
+        .file-info-premium {
+            background: rgba(255,255,255,0.02);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 0.85rem 1rem;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 0.75rem;
+            transition: border-color 0.2s;
+        }
+        .file-info-premium:hover {
+            border-color: var(--border-hover);
+        }
+
+        /* Interactive Toggles & settings card */
+        .settings-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            padding: 1.25rem;
+            display: flex;
+            flex-direction: column;
+            gap: 1rem;
+            overflow-y: auto;
+            max-height: 480px;
+        }
+        .settings-title {
+            font-family: var(--font-serif);
+            font-size: 0.95rem;
+            font-weight: 600;
+            letter-spacing: 0.02em;
+            color: var(--text-main);
+            border-bottom: 1px solid var(--border);
+            padding-bottom: 0.5rem;
+            margin: 0;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+
+        /* Glowing Action Buttons */
+        .btn-glow-primary {
+            background: linear-gradient(135deg, #8B5CF6 0%, #6D28D9 100%);
+            color: #FFFFFF;
+            border: none;
+            border-radius: var(--radius-md);
+            padding: 0.75rem 1rem;
+            font-family: var(--font-serif);
+            font-size: 0.95rem;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.25s;
+            box-shadow: 0 4px 12px var(--primary-glow);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.5rem;
+        }
+        .btn-glow-primary:hover:not(:disabled) {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 20px var(--primary-glow), 0 0 0 2px rgba(139, 92, 246, 0.5);
+            background: linear-gradient(135deg, #A78BFA 0%, #7C3AED 100%);
+        }
+        .btn-glow-primary:disabled {
+            background: var(--border);
+            color: var(--text-muted);
+            cursor: not-allowed;
+            box-shadow: none;
+        }
+
+        /* Visual Page Viewer overrides */
+        .viewer-viewport-premium {
+            flex: 1;
+            overflow: auto;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 2rem;
+            position: relative;
+        }
+        .canvas-card {
+            box-shadow: 0 20px 50px rgba(0, 0, 0, 0.6), 0 1px 2px rgba(255,255,255,0.05);
+            border-radius: var(--radius-lg);
+            background: #ffffff;
+            position: relative;
+            transform-origin: center center;
+            transition: transform 0.2s cubic-bezier(0.1, 0.9, 0.2, 1);
+        }
+
+        /* AI workstation tabs */
+        .tab-ribbon {
+            display: flex;
+            background: rgba(17, 24, 39, 0.6);
+            border-bottom: 1px solid var(--border);
+            padding: 0.25rem 0.25rem 0 0.25rem;
+            gap: 0.25rem;
+        }
+        .ai-tab-btn {
+            flex: 1;
+            background: transparent;
+            border: none;
+            color: var(--text-muted);
+            padding: 0.75rem 0.5rem;
+            font-size: 0.85rem;
+            font-weight: 600;
+            font-family: var(--font-serif);
+            border-radius: var(--radius-md) var(--radius-md) 0 0;
+            cursor: pointer;
+            transition: all 0.2s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 0.35rem;
+            border-bottom: 2px solid transparent;
+        }
+        .ai-tab-btn:hover {
+            color: var(--text-main);
+            background: rgba(255, 255, 255, 0.02);
+        }
+        .ai-tab-btn.active {
+            color: var(--primary);
+            border-bottom-color: var(--primary);
+            background: rgba(139, 92, 246, 0.05);
+        }
+
+        .tab-panel-container {
+            flex: 1;
+            overflow: hidden;
+            position: relative;
+            display: flex;
+            flex-direction: column;
+        }
+        .ai-tab-panel {
+            display: none;
+            flex-direction: column;
+            flex: 1;
+            overflow-y: auto;
+            padding: 1.25rem;
+            gap: 1.25rem;
+            height: 100%;
+        }
+        .ai-tab-panel.active {
+            display: flex;
+        }
+
+        /* Glassmorphic progress cards overlay */
+        .glass-progress-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(11, 15, 25, 0.8);
+            backdrop-filter: blur(16px);
+            z-index: 50;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Textareas for AI Results */
+        .text-box-premium {
+            width: 100%;
+            height: 100%;
+            min-height: 250px;
+            background: rgba(0, 0, 0, 0.25);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-lg);
+            color: var(--text-main);
+            font-family: 'Inter', monospace;
+            font-size: 0.85rem;
+            line-height: 1.5;
+            padding: 1rem;
+            resize: none;
+            outline: none;
+            transition: border-color 0.2s;
+        }
+        .text-box-premium:focus {
+            border-color: var(--primary);
+        }
+
+        /* Custom scrollbar */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: rgba(255, 255, 255, 0.08);
+            border-radius: 99px;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: rgba(255, 255, 255, 0.15);
+        }
+
+        /* Extracted Structured JSON viewer cards */
+        .json-card-grid {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 0.75rem;
+        }
+        .json-card {
+            background: rgba(255, 255, 255, 0.02);
+            border: 1px solid var(--border);
+            border-radius: var(--radius-md);
+            padding: 0.75rem 1rem;
+            display: flex;
+            flex-direction: column;
+            gap: 0.25rem;
+            transition: all 0.2s;
+        }
+        .json-card:hover {
+            border-color: var(--border-hover);
+            transform: translateX(2px);
+        }
+        .json-key {
+            font-size: 0.75rem;
+            font-weight: 600;
+            color: var(--secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+        }
+        .json-val {
+            font-size: 0.85rem;
+            color: var(--text-main);
+            word-break: break-word;
+        }
+
+        /* Tooltip and Help UI */
+        .tooltip-premium {
+            position: relative;
+            cursor: help;
+            opacity: 0.7;
+            transition: opacity 0.2s;
+        }
+        .tooltip-premium:hover {
+            opacity: 1;
+        }
+        
+        .status-dot {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            transition: background 0.3s;
+        }
+        .status-dot.online { background: var(--success); box-shadow: 0 0 8px var(--success); }
+        .status-dot.offline { background: var(--error); box-shadow: 0 0 8px var(--error); }
+    </style>
+</head>
+<body>
+    <div class="ambient-glow glow-1"></div>
+    <div class="ambient-glow glow-2"></div>
+
+    <div class="workstation-container">
+        
+        <!-- COLUMN 1: CONTROLS & SETTINGS -->
+        <aside class="left-control-panel">
+            <div style="display:flex; justify-content:space-between; align-items:center; border-bottom:1px solid var(--border); padding-bottom:0.75rem;">
+                <div class="header-brand">
+                    <span class="logo-text">DocuVerse</span>
+                    <span id="connection-status" class="status-dot offline" title="Not connected"></span>
                 </div>
-            </div>
-
-            <!-- Processing View -->
-            <div id="process-view" class="hidden">
-                <div class="processing-state">
-                    <!-- <div class="spinner"></div> -->
-                    <div
-                        class="progress-container"
-                        style="
-                            width: 100%;
-                            height: 8px;
-                            background: #e2e8f0;
-                            border-radius: 4px;
-                            overflow: hidden;
-                            margin-bottom: 1rem;
-                        "
-                    >
-                        <div
-                            id="progress-bar"
-                            style="
-                                width: 0%;
-                                height: 100%;
-                                background: var(--primary);
-                                transition: width 0.3s ease;
-                            "
-                        ></div>
-                    </div>
-                    <h3 id="status-text">Starting...</h3>
-                    <p
-                        id="sub-status"
-                        style="color: var(--text-muted); font-size: 0.9rem"
-                    >
-                        0% Complete
-                    </p>
-                </div>
-            </div>
-
-            <!-- Result View -->
-            <div id="result-view" class="hidden">
-                <div class="result-card">
-                    <h3 style="margin-top: 0">Success!</h3>
-                    <p>Your document has been processed.</p>
-                    <div
-                        style="
-                            display: flex;
-                            gap: 0.5rem;
-                            justify-content: center;
-                            margin-top: 1rem;
-                        "
-                    >
-                        <button id="download-btn" class="btn">
-                            <svg
-                                width="20"
-                                height="20"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2"
-                                    d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"
-                                ></path>
-                            </svg>
-                            Download PDF
-                        </button>
-                        <button
-                            id="view-text-btn"
-                            class="btn"
-                            style="
-                                background: var(--surface);
-                                color: var(--text-main);
-                                border: 1px solid var(--border);
-                            "
-                        >
-                            <svg
-                                width="20"
-                                height="20"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2"
-                                    d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"
-                                ></path>
-                            </svg>
-                            View Text
-                        </button>
-                    </div>
-                </div>
-
-                <button
-                    id="reset-btn"
-                    class="btn"
-                    style="
-                        background: transparent;
-                        color: var(--text-muted);
-                        margin-top: 1rem;
-                    "
-                >
-                    Process Another
+                <button id="theme-btn" class="btn btn-icon" title="Toggle Theme" style="background:none; border:none; cursor:pointer; color:var(--text-main); padding:0.25rem;">
+                    <svg id="moon-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"></path></svg>
+                    <svg id="sun-icon" class="hidden" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"></circle><line x1="12" y1="1" x2="12" y2="3"></line><line x1="12" y1="21" x2="12" y2="23"></line><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"></line><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"></line><line x1="1" y1="12" x2="3" y2="12"></line><line x1="21" y1="12" x2="23" y2="12"></line><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"></line><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"></line></svg>
                 </button>
             </div>
-        </div>
 
-        <!-- Text Preview Modal -->
-        <div
-            id="text-preview"
-            class="hidden"
-            style="
-                position: fixed;
-                top: 0;
-                left: 0;
-                width: 100%;
-                height: 100%;
-                background: rgba(0, 0, 0, 0.5);
-                display: flex;
-                justify-content: flex-end;
-                z-index: 1000;
-                backdrop-filter: blur(2px);
-            "
-        >
-            <div
-                style="
-                    width: 90%;
-                    max-width: 500px;
-                    height: 100%;
-                    background: var(--surface);
-                    border-left: 1px solid var(--border);
-                    box-shadow: -4px 0 24px rgba(0, 0, 0, 0.1);
-                    display: flex;
-                    flex-direction: column;
-                    animation: slideIn 0.3s ease-out;
-                "
-            >
-                <!-- Header -->
-                <div
-                    style="
-                        padding: 1.5rem;
-                        border-bottom: 1px solid var(--border);
-                        display: flex;
-                        justify-content: space-between;
-                        align-items: center;
-                    "
-                >
-                    <h3 style="margin: 0; font-weight: 600">Document Text</h3>
-                    <div style="display: flex; gap: 0.5rem">
-                        <button
-                            id="copy-text-btn"
-                            class="btn active"
-                            style="
-                                padding: 0.4rem 0.8rem;
-                                font-size: 0.85rem;
-                                display: flex;
-                                align-items: center;
-                                gap: 0.4rem;
-                            "
-                        >
-                            <svg
-                                xmlns="http://www.w3.org/2000/svg"
-                                width="16"
-                                height="16"
-                                viewBox="0 0 24 24"
-                                fill="none"
-                                stroke="currentColor"
-                                stroke-width="2"
-                                stroke-linecap="round"
-                                stroke-linejoin="round"
-                            >
-                                <rect
-                                    x="9"
-                                    y="9"
-                                    width="13"
-                                    height="13"
-                                    rx="2"
-                                    ry="2"
-                                ></rect>
-                                <path
-                                    d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
-                                ></path>
-                            </svg>
-                            Copy
-                        </button>
-                        <button
-                            id="close-preview"
-                            style="
-                                background: transparent;
-                                border: none;
-                                cursor: pointer;
-                                color: var(--text-muted);
-                                padding: 0.4rem;
-                            "
-                        >
-                            <svg
-                                width="24"
-                                height="24"
-                                fill="none"
-                                stroke="currentColor"
-                                viewBox="0 0 24 24"
-                            >
-                                <path
-                                    stroke-linecap="round"
-                                    stroke-linejoin="round"
-                                    stroke-width="2"
-                                    d="M6 18L18 6M6 6l12 12"
-                                ></path>
-                            </svg>
+            <!-- Upload drop zone -->
+            <div id="workspace-drop-zone" class="drop-zone-premium">
+                <div id="drop-zone" style="display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 100px;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="var(--primary)" stroke-width="1.5" style="width: 32px; height: 32px; margin-bottom: 0.5rem;">
+                        <path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path>
+                        <polyline points="14 2 14 8 20 8"></polyline>
+                        <line x1="16" y1="13" x2="8" y2="13"></line>
+                        <line x1="16" y1="17" x2="8" y2="17"></line>
+                    </svg>
+                    <span style="font-size: 0.85rem; font-weight: 600; display:block; margin-bottom:0.25rem;">Drop document or click to select</span>
+                    <span style="font-size: 0.7rem; color:var(--text-muted);">PDF or Images</span>
+                    <input type="file" id="file-input" class="hidden" accept=".pdf,.jpg,.jpeg,.png,.tif,.tiff,.webp,.avif" aria-label="Upload file">
+                </div>
+            </div>
+
+            <!-- File details preview -->
+            <div id="file-preview" class="file-info-premium hidden">
+                <div style="overflow: hidden; display: flex; flex-direction: column; gap:0.15rem;">
+                    <span id="file-name-display" style="font-weight:600; font-size:0.8rem; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:200px;">document.pdf</span>
+                    <span id="file-size-display" style="font-size:0.7rem; color:var(--text-muted)">0 KB</span>
+                </div>
+                <button id="clear-file-btn" class="btn btn-icon btn-sm" title="Remove File" style="background:none; border:none; color:var(--error); cursor:pointer;">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
+                </button>
+            </div>
+
+            <!-- Configuration controls -->
+            <div class="settings-card">
+                <h4 class="settings-title">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"></circle><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z"></path></svg>
+                    OCR Engine Options
+                </h4>
+
+                <div class="form-group" style="margin:0;">
+                    <label for="setting-model" style="font-size:0.75rem; font-weight:600; display:block; margin-bottom:0.35rem;">Model ID <span class="tooltip-premium" data-tooltip="Local model via LM Studio/Ollama">ⓘ</span></label>
+                    <div style="display:flex; gap:0.25rem;">
+                        <select id="setting-model" style="flex:1; padding:0.4rem; font-size:0.8rem; border-radius:6px; background:var(--bg-main); border:1px solid var(--border); color:var(--text-main);">
+                            <option value="">Fetch models...</option>
+                        </select>
+                        <button id="refresh-models-btn" class="btn" title="Refresh Models" style="padding:0.4rem; border:1px solid var(--border); background:rgba(255,255,255,0.05); color:var(--text-main); border-radius:6px; cursor:pointer;">
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 2v6h-6"></path><path d="M3 12a9 9 0 0 1 15-6.7L21 8"></path></svg>
                         </button>
                     </div>
                 </div>
 
-                <!-- Content -->
-                <div
-                    id="text-content"
-                    style="
-                        flex: 1;
-                        padding: 1.5rem;
-                        overflow-y: auto;
-                        white-space: pre-wrap;
-                        line-height: 1.6;
-                        font-family: monospace;
-                        font-size: 0.9rem;
-                        color: var(--text-main);
-                    "
-                ></div>
+                <div class="form-group" style="margin:0;">
+                    <label style="font-size:0.75rem; font-weight:600; display:block; margin-bottom:0.35rem;">Pipeline Mode</label>
+                    <div style="display:flex; gap:0.25rem;" id="setting-pipeline-mode">
+                        <input type="radio" name="mode" id="mode-hybrid" value="hybrid" checked style="display:none;">
+                        <label for="mode-hybrid" style="flex:1; text-align:center; font-size:0.75rem; padding: 0.35rem; background: rgba(255,255,255,0.05); border-radius: 4px; cursor: pointer; border: 1px solid var(--border);">Hybrid</label>
+                        <input type="radio" name="mode" id="mode-grounded" value="grounded" style="display:none;">
+                        <label for="mode-grounded" style="flex:1; text-align:center; font-size:0.75rem; padding: 0.35rem; background: rgba(255,255,255,0.05); border-radius: 4px; cursor: pointer; border: 1px solid var(--border);">Grounded</label>
+                    </div>
+                </div>
+
+                <div class="form-group" style="margin:0;">
+                    <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:0.25rem;">
+                        <span id="dpi-label">Resolution DPI</span>
+                        <span id="dpi-val" style="font-weight:600;">200</span>
+                    </div>
+                    <input type="range" id="setting-dpi" min="72" max="400" value="200" style="width:100%;">
+                </div>
+
+                <div class="form-group" style="margin:0;">
+                    <div style="display:flex; justify-content:space-between; font-size:0.75rem; margin-bottom:0.25rem;">
+                        <span id="concurrency-label">Concurrency</span>
+                        <span id="concurrency-val" style="font-weight:600;">3</span>
+                    </div>
+                    <input type="range" id="setting-concurrency" min="1" max="8" value="3" style="width:100%;">
+                </div>
+
+                <!-- Advanced Accordion Toggle -->
+                <details style="border-top:1px solid var(--border); padding-top:0.5rem; margin-top:0.25rem;">
+                    <summary style="font-size:0.75rem; font-weight:600; cursor:pointer; color:var(--primary); padding-bottom:0.25rem;">Advanced Configuration</summary>
+                    <div style="display:flex; flex-direction:column; gap:0.75rem; padding-top:0.5rem;">
+                        <div class="form-group" style="margin:0;">
+                            <label for="setting-dense-mode" style="font-size:0.7rem; font-weight:600; display:block; margin-bottom:0.25rem;">Dense Mode</label>
+                            <select id="setting-dense-mode" style="width:100%; padding:0.3rem; font-size:0.75rem; border-radius:4px; background:var(--bg-main); border:1px solid var(--border); color:var(--text-main);">
+                                <option value="auto">Auto</option>
+                                <option value="always">Always</option>
+                                <option value="never">Never</option>
+                            </select>
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <div style="display:flex; justify-content:space-between; font-size:0.7rem; margin-bottom:0.2rem;">
+                                <span id="max-image-dim-label">Max Image Dim</span>
+                                <span id="max-image-dim-val">1024</span>
+                            </div>
+                            <input type="range" id="setting-max-image-dim" min="256" max="2048" value="1024" step="128" style="width:100%;">
+                        </div>
+                        <div class="form-group" style="margin:0;">
+                            <div style="display:flex; justify-content:space-between; font-size:0.7rem; margin-bottom:0.2rem;">
+                                <span id="dense-threshold-label">Dense Threshold</span>
+                                <span id="dense-threshold-val">60</span>
+                            </div>
+                            <input type="range" id="setting-dense-threshold" min="10" max="150" value="60" step="5" style="width:100%;">
+                        </div>
+                        
+                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.7rem;">
+                            <span>Refine Crops</span>
+                            <input type="checkbox" id="setting-refine" checked>
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.7rem;">
+                            <span>Self-Correction</span>
+                            <input type="checkbox" id="setting-self-correction">
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.7rem;">
+                            <span>Binarize Handwriting</span>
+                            <input type="checkbox" id="setting-binarize">
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.7rem;">
+                            <span>Dual-Engine Hint</span>
+                            <input type="checkbox" id="setting-dual-engine">
+                        </div>
+                        <div style="display:flex; justify-content:space-between; align-items:center; font-size:0.7rem;">
+                            <span>Cross-Page Merge</span>
+                            <input type="checkbox" id="setting-cross-page">
+                        </div>
+
+                        <div class="form-group" style="margin:0;">
+                            <label for="setting-spellcheck" style="font-size:0.7rem; font-weight:600; display:block; margin-bottom:0.25rem;">Spellcheck Dictionary</label>
+                            <select id="setting-spellcheck" style="width:100%; padding:0.3rem; font-size:0.75rem; border-radius:4px; background:var(--bg-main); border:1px solid var(--border); color:var(--text-main);">
+                                <option value="none">None</option>
+                                <option value="ar">Arabic (ara)</option>
+                                <option value="en-US">English (eng)</option>
+                                <option value="de">German (deu)</option>
+                                <option value="es">Spanish (spa)</option>
+                                <option value="fr">French (fra)</option>
+                            </select>
+                        </div>
+                        
+                        <div class="form-group" style="margin:0;">
+                            <label for="setting-pages" style="font-size:0.7rem; display:block; margin-bottom:0.25rem;">Page Range</label>
+                            <input type="text" id="setting-pages" placeholder="e.g. 1-3,5" style="width:100%; padding:0.35rem; font-size:0.75rem; border-radius:4px; background:var(--bg-main); border:1px solid var(--border); color:var(--text-main); font-family:monospace;">
+                        </div>
+                    </div>
+                </details>
+            </div>
+
+            <!-- Glowing extraction run button -->
+            <button id="start-btn" class="btn-glow-primary" disabled style="width:100%; margin-top:auto;">
+                <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polygon points="5 3 19 12 5 21 5 3"></polygon></svg>
+                Run AI OCR Extraction
+            </button>
+        </aside>
+
+        <!-- COLUMN 2: VISUAL VIEWPORT -->
+        <main class="central-viewport">
+            <header class="wk-header">
+                <!-- Page Navigation Indicators -->
+                <div class="header-wk-toolbar hidden" id="header-wk-toolbar" style="display:flex; align-items:center; gap:0.75rem;">
+                    <button class="toolbar-page-nav-btn" id="ribbon-prev-page" title="Previous Page" style="background:none; border:none; color:var(--text-main); cursor:pointer;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 18 9 12 15 6"></polyline></svg>
+                    </button>
+                    <span style="font-size:0.8rem;">Page <span id="ribbon-current-page" style="font-weight:600">1</span> of <span id="ribbon-total-pages" style="font-weight:600">1</span></span>
+                    <button class="toolbar-page-nav-btn" id="ribbon-next-page" title="Next Page" style="background:none; border:none; color:var(--text-main); cursor:pointer;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 18 15 12 9 6"></polyline></svg>
+                    </button>
+                    
+                    <div style="width:1px; height:16px; background:var(--border); margin:0 0.5rem;"></div>
+
+                    <!-- Zoom Controls -->
+                    <button class="toolbar-page-nav-btn" id="ribbon-zoom-out" title="Zoom Out" style="background:none; border:none; color:var(--text-main); cursor:pointer;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    </button>
+                    <span id="ribbon-zoom-label" style="font-size:0.8rem; font-variant-numeric:tabular-nums;">100%</span>
+                    <button class="toolbar-page-nav-btn" id="ribbon-zoom-in" title="Zoom In" style="background:none; border:none; color:var(--text-main); cursor:pointer;">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                    </button>
+                    <button class="toolbar-page-nav-btn" id="ribbon-fit-width" title="Fit to Width" style="background:none; border:none; color:var(--text-main); cursor:pointer; margin-left:0.25rem;">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="15 3 21 3 21 9"></polyline><polyline points="9 21 3 21 3 15"></polyline><line x1="21" y1="3" x2="14" y2="10"></line><line x1="3" y1="21" x2="10" y2="14"></line></svg>
+                    </button>
+                </div>
+                
+                <div style="flex-grow:1;"></div>
+                
+                <!-- Open Connection Settings -->
+                <button id="btn-open-settings-modal" class="btn" style="font-size: 0.75rem; padding: 0.35rem 0.6rem; border:1px solid var(--border); background:rgba(255,255,255,0.02); color:var(--text-main); cursor:pointer; border-radius:4px; display:flex; align-items:center; gap:0.25rem;">
+                    <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z"></path></svg>
+                    Server Settings
+                </button>
+            </header>
+
+            <div class="viewer-viewport-premium" id="workspace-viewport-container">
+                <!-- Welcome dropzone overlay inside viewport -->
+                <div id="workspace-viewport-welcome" style="display: flex; flex-direction: column; align-items: center; justify-content: center; height: 100%; text-align: center;">
+                    <svg viewBox="0 0 24 24" fill="none" stroke="var(--text-muted)" stroke-width="1" style="width: 64px; height: 64px; margin-bottom: 1.25rem; opacity:0.6;">
+                        <circle cx="12" cy="12" r="10"></circle><line x1="12" y1="8" x2="12" y2="12"></line><line x1="12" y1="16" x2="12.01" y2="16"></line>
+                    </svg>
+                    <h3 style="font-family: var(--font-serif); font-size: 1.15rem; font-weight: 500; margin: 0 0 0.5rem 0;">No active workspace loaded</h3>
+                    <p style="font-size: 0.8rem; color: var(--text-muted); max-width: 260px; margin: 0;">Upload a document on the left to begin your AI workstation experience.</p>
+                </div>
+
+                <!-- PDF Render Viewport -->
+                <div id="workspace-viewport" class="hidden">
+                    <div id="workspace-canvas-container" class="canvas-card">
+                        <canvas id="workspace-canvas" aria-label="PDF Page Canvas"></canvas>
+                        <!-- Bounding box SVGs rendered here -->
+                        <svg id="workspace-bbox-svg" class="pdf-bbox-svg" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: none;"></svg>
+                        <div id="workspace-text-layer" class="pdf-text-layer" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; pointer-events: auto;"></div>
+                    </div>
+                </div>
+
+                <!-- Glassmorphic Progress Overlay -->
+                <div id="process-view" class="glass-progress-overlay hidden">
+                    <div style="background: rgba(17, 24, 39, 0.9); border: 1px solid var(--border); border-radius: var(--radius-lg); padding: 2rem; width: 90%; max-width: 360px; text-align: center; box-shadow: var(--shadow-lg);">
+                        <h3 style="font-family: var(--font-serif); font-size: 1.15rem; margin-bottom: 1.5rem;">Extracting Document...</h3>
+                        
+                        <!-- Mini stage bars -->
+                        <div style="display:flex; justify-content:space-between; margin-bottom:1.5rem; font-size:0.65rem; color:var(--text-muted);">
+                            <span id="stage-convert" style="font-weight:600;">Convert</span>
+                            <span id="stage-detect">Detect</span>
+                            <span id="stage-ocr">OCR</span>
+                            <span id="stage-refine">Refine</span>
+                            <span id="stage-embed">Embed</span>
+                        </div>
+
+                        <!-- Main loading bar -->
+                        <div style="background: rgba(255,255,255,0.05); border-radius: 99px; height: 6px; width: 100%; overflow: hidden; margin-bottom: 0.75rem;">
+                            <div id="progress-bar" style="background: var(--primary); height: 100%; width: 0%; transition: width 0.2s ease;"></div>
+                        </div>
+
+                        <div style="display: flex; justify-content: space-between; font-size: 0.75rem; margin-bottom: 1rem;">
+                            <span id="status-text" style="font-weight:500;">Running...</span>
+                            <span id="sub-status" style="font-weight:600;">0%</span>
+                        </div>
+
+                        <div id="elapsed-time" style="font-size: 1.25rem; font-weight: 600; margin-bottom: 1.5rem; font-variant-numeric: tabular-nums;">00:00</div>
+
+                        <button id="cancel-btn" class="btn btn-sm" style="width: 100%; padding:0.4rem; border:1px solid var(--border); background:rgba(255,255,255,0.05); color:var(--text-main); cursor:pointer; border-radius:4px;">Cancel Process</button>
+                    </div>
+                </div>
+            </div>
+        </main>
+
+        <!-- COLUMN 3: AI tabbed workstations -->
+        <aside class="right-ai-panel">
+            <nav class="tab-ribbon">
+                <button class="ai-tab-btn active" id="tab-btn-text" data-tab="tab-panel-text">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"></path></svg>
+                    Markdown
+                </button>
+                <button class="ai-tab-btn" id="tab-btn-translator" data-tab="tab-panel-translator">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M5 8h14M5 12h14M11 16h8"></path></svg>
+                    Translator
+                </button>
+                <button class="ai-tab-btn" id="tab-btn-extractor" data-tab="tab-panel-extractor">
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"></rect><line x1="9" y1="3" x2="9" y2="21"></line></svg>
+                    Schema Extractor
+                </button>
+            </nav>
+
+            <div class="tab-panel-container">
+                
+                <!-- TAB 1: MARKDOWN -->
+                <div class="ai-tab-panel active" id="tab-panel-text">
+                    <div style="display:flex; justify-content:space-between; align-items:center;">
+                        <h4 style="font-family:var(--font-serif); margin:0; font-size:0.95rem;">Extracted Markdown</h4>
+                        <div style="display:flex; gap:0.25rem;">
+                            <button id="copy-md-btn" class="btn btn-sm" style="font-size:0.75rem; padding:0.25rem 0.5rem;">Copy</button>
+                            <button id="dl-md-btn" class="btn btn-sm btn-primary" style="font-size:0.75rem; padding:0.25rem 0.5rem;">.md</button>
+                        </div>
+                    </div>
+                    
+                    <div style="flex:1; overflow:hidden; position:relative;">
+                        <textarea id="md-content" class="text-box-premium" readonly placeholder="Markdown representation of document will appear here after extraction."></textarea>
+                    </div>
+
+                    <div style="display:flex; justify-content:space-between; align-items:center; border-top:1px solid var(--border); padding-top:0.75rem;">
+                        <span style="font-size:0.75rem; color:var(--text-muted);">Plain Text Output</span>
+                        <div style="display:flex; gap:0.25rem;">
+                            <button id="copy-text-btn" class="btn btn-sm" style="font-size:0.75rem; padding:0.25rem 0.5rem;">Copy</button>
+                            <button id="dl-txt-btn" class="btn btn-sm btn-primary" style="font-size:0.75rem; padding:0.25rem 0.5rem;">.txt</button>
+                        </div>
+                    </div>
+                    <div style="height: 120px; overflow:hidden; position:relative;">
+                        <textarea id="text-content" class="text-box-premium" readonly placeholder="Plain text version..."></textarea>
+                    </div>
+                </div>
+
+                <!-- TAB 2: TRANSLATOR -->
+                <div class="ai-tab-panel" id="tab-panel-translator">
+                    <h4 style="font-family:var(--font-serif); margin:0; font-size:0.95rem;">AI Document Translation</h4>
+                    
+                    <div class="form-group" style="display:flex; gap:0.5rem; align-items:center;">
+                        <select id="translate-lang-select" style="flex:1; padding:0.4rem; font-size:0.8rem; border-radius:6px; background:rgba(0,0,0,0.15); border:1px solid var(--border); color:var(--text-main);">
+                            <option value="English">English</option>
+                            <option value="Spanish">Spanish (Español)</option>
+                            <option value="French">French (Français)</option>
+                            <option value="German">German (Deutsch)</option>
+                            <option value="Arabic">Arabic (العربية)</option>
+                            <option value="Chinese">Chinese (中文)</option>
+                            <option value="Japanese">Japanese (日本語)</option>
+                            <option value="Russian">Russian (Русский)</option>
+                            <option value="Portuguese">Portuguese (Português)</option>
+                            <option value="Italian">Italian (Italiano)</option>
+                            <option value="Dutch">Dutch (Nederlands)</option>
+                            <option value="Swedish">Swedish (Svenska)</option>
+                        </select>
+                        <button id="translate-btn" class="btn-glow-primary" style="padding:0.4rem 0.8srem; font-size:0.8rem; border-radius:6px;">
+                            Translate
+                        </button>
+                    </div>
+
+                    <div style="flex:1; overflow:hidden; position:relative; display:flex; flex-direction:column; gap:0.5rem;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.75rem; color:var(--text-muted);">Translated Markdown</span>
+                            <div style="display:flex; gap:0.25rem;">
+                                <button id="copy-trans-btn" class="btn btn-sm" style="font-size:0.75rem; padding:0.25rem 0.5rem;">Copy</button>
+                                <button id="dl-trans-btn" class="btn btn-sm btn-primary" style="font-size:0.75rem; padding:0.25rem 0.5rem;">.md</button>
+                            </div>
+                        </div>
+                        <textarea id="translated-markdown-content" class="text-box-premium" readonly placeholder="Translated document markdown will appear here..."></textarea>
+                    </div>
+                </div>
+
+                <!-- TAB 3: SCHEMA EXTRACTOR -->
+                <div class="ai-tab-panel" id="tab-panel-extractor">
+                    <h4 style="font-family:var(--font-serif); margin:0; font-size:0.95rem;">Structured Schema Extractor</h4>
+                    
+                    <div class="form-group" style="display:flex; flex-direction:column; gap:0.5rem;">
+                        <label for="extractor-template-select" style="font-size:0.75rem; font-weight:600;">Extraction Template</label>
+                        <select id="extractor-template-select" style="padding:0.4rem; font-size:0.8rem; border-radius:6px; background:rgba(0,0,0,0.15); border:1px solid var(--border); color:var(--text-main);">
+                            <option value="invoice">Invoice / Receipt Schema</option>
+                            <option value="resume">Resume / CV Parsing</option>
+                            <option value="academic">Academic & Research Papers</option>
+                            <option value="custom">Custom Extraction Prompt</option>
+                        </select>
+                    </div>
+
+                    <div class="form-group hidden" id="extractor-custom-prompt-container" style="display:flex; flex-direction:column; gap:0.35rem;">
+                        <label for="extractor-custom-prompt" style="font-size:0.75rem; font-weight:600;">Custom Extraction Instructions</label>
+                        <input type="text" id="extractor-custom-prompt" placeholder="e.g. Extract company names and total revenue metrics..." style="padding:0.4rem; font-size:0.8rem; border-radius:6px; background:rgba(0,0,0,0.15); border:1px solid var(--border); color:var(--text-main);">
+                    </div>
+
+                    <button id="extract-btn" class="btn-glow-primary" style="padding:0.5rem; font-size:0.85rem; border-radius:6px; width:100%;">
+                        Extract Structured Data
+                    </button>
+
+                    <!-- Extracted Results Area -->
+                    <div style="flex:1; display:flex; flex-direction:column; gap:0.5rem; overflow:hidden;">
+                        <div style="display:flex; justify-content:space-between; align-items:center;">
+                            <span style="font-size:0.75rem; color:var(--text-muted);">Extracted JSON Output</span>
+                            <div style="display:flex; gap:0.25rem;">
+                                <button id="copy-json-btn" class="btn btn-sm" style="font-size:0.75rem; padding:0.25rem 0.5rem;">Copy</button>
+                                <button id="dl-json-btn" class="btn btn-sm btn-primary" style="font-size:0.75rem; padding:0.25rem 0.5rem;">.json</button>
+                            </div>
+                        </div>
+
+                        <!-- Side-by-side card list / raw JSON accordion -->
+                        <details open style="border:1px solid var(--border); border-radius:6px; padding:0.5rem;">
+                            <summary style="font-size:0.75rem; font-weight:600; cursor:pointer; color:var(--secondary);">Visual Key-Values</summary>
+                            <div id="extracted-json-visual-cards" class="json-card-grid" style="margin-top:0.5rem; max-height:160px; overflow-y:auto; padding:0.25rem;">
+                                <div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">No data extracted yet.</div>
+                            </div>
+                        </details>
+
+                        <div style="flex:1; overflow:hidden; position:relative; min-height:120px; display:flex; flex-direction:column;">
+                            <textarea id="extracted-json-raw" class="text-box-premium" readonly placeholder="Raw structured JSON will appear here..."></textarea>
+                        </div>
+                    </div>
+                </div>
+
+            </div>
+        </aside>
+    </div>
+
+    <!-- Toast elements -->
+    <div id="toast-container" class="toast-container" style="position:fixed; bottom:20px; right:20px; z-index:99999;"></div>
+
+    <!-- Global Connection Settings Modal -->
+    <div id="settings-modal" class="modal-backdrop hidden" style="backdrop-filter: blur(8px); z-index: 10000; display: flex; align-items: center; justify-content: center; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.6);">
+        <div class="modal-content" style="background: var(--bg-main); border: 1px solid var(--border); border-radius: 12px; width: 440px; max-width: 95%; box-shadow: 0 20px 40px rgba(0,0,0,0.4); display: flex; flex-direction: column; overflow: hidden;">
+            <div class="modal-header" style="padding: 1.25rem 1.5rem; border-bottom: 1px solid var(--border); display: flex; justify-content: space-between; align-items: center; background: rgba(255,255,255,0.02);">
+                <h3 style="margin: 0; font-size: 1.1rem; font-weight: 600; color: var(--text-main);">Server Configuration</h3>
+                <button id="settings-modal-close" class="btn btn-icon" style="opacity: 0.7; transition: opacity 0.2s; cursor: pointer; background: transparent; border: none; color: var(--text-main);">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"></path></svg>
+                </button>
+            </div>
+            <div class="modal-body" style="padding: 1.5rem; display: flex; flex-direction: column; gap: 1.25rem; overflow-y: auto;">
+                
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label for="setting-api-base" style="font-weight: 600; margin-bottom: 0.5rem; display: block; color: var(--text-main);">
+                        Server URL 
+                        <span id="connection-status-dot" class="status-dot offline" title="Not connected" style="margin-left: 0.5rem; display: inline-block;"></span>
+                    </label>
+                    <input type="text" id="setting-api-base" placeholder="http://localhost:11434/v1" style="width: 100%; padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: rgba(0,0,0,0.15); color: var(--text-main); font-family: monospace; font-size: 0.9rem;">
+                </div>
+
+                <div class="form-group" style="margin-bottom: 0;">
+                    <label for="setting-api-key" style="font-weight: 600; margin-bottom: 0.5rem; display: block; color: var(--text-main);">API Key (Optional)</label>
+                    <input type="password" id="setting-api-key" placeholder="sk-..." autocomplete="off" style="width: 100%; padding: 0.75rem; border-radius: 6px; border: 1px solid var(--border); background: rgba(0,0,0,0.15); color: var(--text-main); font-family: monospace; font-size: 0.9rem;">
+                </div>
+            </div>
+            <div class="modal-footer" style="padding: 1.25rem 1.5rem; border-top: 1px solid var(--border); background: rgba(0,0,0,0.1); display: flex; justify-content: flex-end; gap: 0.75rem;">
+                <button id="settings-modal-cancel" class="btn btn-secondary" style="padding: 0.5rem 1rem; border-radius: 6px; border: 1px solid var(--border); background: transparent; color: var(--text-main); cursor: pointer; font-weight: 500;">Cancel</button>
+                <button id="settings-modal-save" class="btn btn-primary" style="padding: 0.5rem 1rem; border-radius: 6px; border: none; background: var(--primary); color: white; cursor: pointer; font-weight: 500;">Save Settings</button>
             </div>
         </div>
+    </div>
 
-        <script src="/static/script.js"></script>
-    </body>
+    <!-- Application Scripts -->
+    <script src="/static/js/state_and_api.js?v=5"></script>
+    <script src="/static/js/workspace_ui.js?v=5"></script>
+    <script src="/static/js/app.js?v=5"></script>
+</body>
 </html>
