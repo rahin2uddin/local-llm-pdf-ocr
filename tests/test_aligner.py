@@ -12,12 +12,12 @@ from __future__ import annotations
 import pytest
 
 from pdf_ocr.core.aligner import (
+    _SKIP_BOX_COST,
     HybridAligner,
     _dp_align,
     _match_cost,
     _normalize_lines,
     _reading_order_sort,
-    _SKIP_BOX_COST,
 )
 
 
@@ -284,7 +284,7 @@ _AUTODETECT_R_BOXES = [
 # Surya-style row-major input: L1, R1, L2, R2, L3, R3, L4, R4.
 _AUTODETECT_BOXES_ROW_MAJOR = [
     box
-    for pair in zip(_AUTODETECT_L_BOXES, _AUTODETECT_R_BOXES)
+    for pair in zip(_AUTODETECT_L_BOXES, _AUTODETECT_R_BOXES, strict=False)
     for box in pair
 ]
 
@@ -371,7 +371,7 @@ class TestReadingOrderSort:
         ]
         # Interleave so input is row-major.
         interleaved: list[list[float]] = []
-        for left, right in zip(L, R):
+        for left, right in zip(L, R, strict=False):
             interleaved.append(right)
             interleaved.append(left)
 

@@ -216,7 +216,7 @@ class TestOCRPipeline:
 
     async def test_refine_skips_when_disabled(self, make_stub_ocr):
         ocr = make_stub_ocr(page_lines=["single"])
-        aligner = _StubAligner(alignment=lambda s, l: [(s[0][0], l[0])] + [(b, "") for b, _ in s[1:]])
+        aligner = _StubAligner(alignment=lambda s, lines: [(s[0][0], lines[0])] + [(b, "") for b, _ in s[1:]])
         pdf = _StubPDF(n_pages=1)
         pipe = OCRPipeline(aligner, ocr, pdf)
 
@@ -297,7 +297,7 @@ class TestOCRPipeline:
             await pipe.run("in.pdf", "out.pdf", dense_mode="invalid")
 
     async def test_progress_stages_all_fire(self, stub_ocr):
-        aligner = _StubAligner(alignment=lambda s, l: [(b, "") for b, _ in s])
+        aligner = _StubAligner(alignment=lambda s, lines: [(b, "") for b, _ in s])
         pipe = OCRPipeline(aligner, stub_ocr, _StubPDF(n_pages=1))
 
         stages_seen = []

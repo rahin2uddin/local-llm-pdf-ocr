@@ -93,6 +93,7 @@ class TestHallucinationFilter:
         crops. perform_ocr_on_crop must drop those instead of placing them
         in the searchable text layer."""
         import asyncio
+
         from pdf_ocr.core.ocr import OCRProcessor
 
         ocr = OCRProcessor.__new__(OCRProcessor)  # skip real init
@@ -109,6 +110,7 @@ class TestHallucinationFilter:
 
     def test_normal_crop_response_passes_through(self):
         import asyncio
+
         from pdf_ocr.core.ocr import OCRProcessor
 
         ocr = OCRProcessor.__new__(OCRProcessor)
@@ -127,6 +129,7 @@ class TestHallucinationFilter:
         # exercise) must NOT be silently dropped. The filter only fires
         # when the response IS the pangram, not when it merely contains it.
         import asyncio
+
         from pdf_ocr.core.ocr import OCRProcessor
 
         ocr = OCRProcessor.__new__(OCRProcessor)
@@ -149,6 +152,7 @@ class TestHallucinationFilter:
         # OlmOCR sometimes wraps the pangram in quotes or appends ! / ? —
         # normalization must still recognise it as the fallback.
         import asyncio
+
         from pdf_ocr.core.ocr import OCRProcessor
 
         def _make_fake(response: str):

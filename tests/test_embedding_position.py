@@ -318,7 +318,7 @@ class TestFullBboxCoverage:
         # Every embedded word must sit INSIDE the original bbox — not at
         # the page top (where the full-page fallback would have placed it).
         tol = 1.0
-        for x0, y0, x1, y1, w, *_ in words:
+        for _x0, y0, _x1, y1, w, *_ in words:
             assert box_rect.y0 - tol <= y0 and y1 <= box_rect.y1 + tol, (
                 f"word {w!r} at y=({y0:.1f},{y1:.1f}) escaped box "
                 f"y=({box_rect.y0:.1f},{box_rect.y1:.1f}) — likely shunted to "
@@ -396,7 +396,7 @@ class TestFullBboxCoverage:
         assert words, "expected SOME embedded words"
         # Every word must sit inside the original bbox.
         tol = 1.0
-        for x0, y0, x1, y1, w, *_ in words:
+        for _x0, y0, _x1, y1, w, *_ in words:
             assert box_rect.y0 - tol <= y0 and y1 <= box_rect.y1 + tol, (
                 f"word {w!r} y=({y0:.1f},{y1:.1f}) escaped box "
                 f"({box_rect.y0:.1f},{box_rect.y1:.1f})"
