@@ -1,3 +1,8 @@
+#This was done by someone really dumb so can someone smart have a look at it to improve it, the original read is down below, it went through a lot of changes so idk what if diffrent but i think it is somewhat improved GUI and easier to setup with install.bat and you can run it from start page, make sure when making a change to click stop_app.bat then reinstall or you can do everything manually. I don't know if i uploaded the correct files so ask an AI agent to double check and install anything missing. 
+
+
+
+
 # 📄 Local LLM PDF OCR
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
