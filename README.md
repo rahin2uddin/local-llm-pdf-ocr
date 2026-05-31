@@ -1,8 +1,3 @@
-
-# I don't know how to upload here properly, it should work, if not ask an agent this is just a gui for the original which is where the readme is from. 
-
-
-
 # 📄 Local LLM PDF OCR
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
