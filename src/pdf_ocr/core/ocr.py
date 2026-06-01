@@ -416,7 +416,7 @@ async def _list_loaded_model_ids(client: AsyncOpenAI, api_base: str) -> list[str
             f"  - Does it expose GET /v1/models? (Most do; some custom servers "
             f"don't — pass --no-verify-model to skip this check.)"
         ) from e
-    return [m.id for m in page.data]
+    return [m.id for m in page.data] if page.data else []
 
 
 def _model_in_loaded(model: str, loaded: list[str]) -> bool:

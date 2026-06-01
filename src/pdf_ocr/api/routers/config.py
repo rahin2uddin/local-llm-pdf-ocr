@@ -3,6 +3,8 @@ import os
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from pdf_ocr.utils.security import is_ssrf_target
+
 router = APIRouter()
 
 # ---------------------------------------------------------------------------
@@ -55,7 +57,19 @@ async def update_config(body: dict):
                 # Don't overwrite api_key with the masked version if the user didn't change it
                 if key == "api_key" and ("..." in body[key] or body[key] == "********"):
                     continue
-                _config[key] = expected(body[key])
+                val = expected(body[key])
+                if key == "api_base" and is_ssrf_target(val):
+                    return JSONResponse(
+                        status_code=403,
+                        content={
+                            "error": (
+                                "Invalid api_base: SSRF protection. If you are pointing to a local or private "
+                                "model server, please set the environment variable ALLOW_SSRF_LOCAL=true "
+                                "to allow local network connections."
+                            )
+                        }
+                    )
+                _config[key] = val
             except (ValueError, TypeError):
                 pass  # skip values that cannot be coerced
     return await get_config()
@@ -71,6 +85,17 @@ async def list_models():
 
     Uses the current ``api_base`` from the config store.
     """
+    if is_ssrf_target(_config["api_base"]):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": (
+                    "Invalid api_base: SSRF protection. If you are pointing to a local or private "
+                    "model server, please set the environment variable ALLOW_SSRF_LOCAL=true "
+                    "to allow local network connections."
+                )
+            }
+        )
     try:
         from openai import AsyncOpenAI
 
@@ -79,7 +104,7 @@ async def list_models():
             api_key=_config["api_key"],
         )
         response = await client.models.list()
-        model_ids = [m.id for m in response.data]
+        model_ids = [m.id for m in response.data] if response.data else []
         return JSONResponse(content={"models": model_ids})
     except Exception as exc:
         return JSONResponse(content={"models": [], "error": str(exc)})

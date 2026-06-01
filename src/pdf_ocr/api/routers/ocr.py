@@ -1,5 +1,4 @@
 import asyncio
-import ipaddress
 import json
 import os
 import re
@@ -10,7 +9,6 @@ import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
 
 from fastapi import APIRouter, File, Form, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
@@ -24,32 +22,12 @@ from pdf_ocr import (
     PromptedGroundedOCR,
 )
 from pdf_ocr.core.pdf import IMAGE_EXTENSIONS
+from pdf_ocr.utils import is_ssrf_target
 
 from .config import _config
 from .websocket import manager
 
 router = APIRouter()
-
-
-def _is_ssrf_target(url: str | None) -> bool:
-    if not url:
-        return False
-    if os.getenv("ALLOW_SSRF_LOCAL", "true").lower() == "true":
-        return False
-    try:
-        host = urlparse(url).hostname or ""
-        try:
-            ip = ipaddress.ip_address(host)
-            if ip.is_private or ip.is_loopback or ip.is_link_local or ip.is_multicast:
-                return True
-        except ValueError:
-            pass
-        blocked = ("localhost", "metadata.google.internal")
-        if host in blocked or host.endswith(".local"):
-            return True
-        return False
-    except Exception:
-        return False
 
 
 def _cleanup(*paths):
@@ -185,8 +163,17 @@ async def process_pdf(
 
     # -- Resolve effective parameters from form values or config defaults ----
     active_api_base = api_base if api_base is not None else _config["api_base"]
-    if _is_ssrf_target(active_api_base):
-        return JSONResponse(status_code=403, content={"error": "Invalid api_base: SSRF protection"})
+    if is_ssrf_target(active_api_base):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": (
+                    "Invalid api_base: SSRF protection. If you are pointing to a local or private "
+                    "model server, please set the environment variable ALLOW_SSRF_LOCAL=true "
+                    "to allow local network connections."
+                )
+            }
+        )
     active_api_key = api_key if api_key is not None else _config["api_key"]
     active_model = model if model is not None else _config["model"]
     active_pipeline_mode = pipeline_mode if pipeline_mode is not None else _config["pipeline_mode"]
@@ -404,8 +391,17 @@ async def translate_text(body: dict):
         return {"translated_text": ""}
 
     active_api_base = body.get("api_base") or _config["api_base"]
-    if _is_ssrf_target(active_api_base):
-        return JSONResponse(status_code=403, content={"error": "Invalid api_base: SSRF protection"})
+    if is_ssrf_target(active_api_base):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": (
+                    "Invalid api_base: SSRF protection. If you are pointing to a local or private "
+                    "model server, please set the environment variable ALLOW_SSRF_LOCAL=true "
+                    "to allow local network connections."
+                )
+            }
+        )
     active_api_key = body.get("api_key") or _config["api_key"]
     active_model = body.get("model") or _config["model"]
 
@@ -452,8 +448,17 @@ async def extract_data(body: dict):
         return {"extracted_data": {}}
 
     active_api_base = body.get("api_base") or _config["api_base"]
-    if _is_ssrf_target(active_api_base):
-        return JSONResponse(status_code=403, content={"error": "Invalid api_base: SSRF protection"})
+    if is_ssrf_target(active_api_base):
+        return JSONResponse(
+            status_code=403,
+            content={
+                "error": (
+                    "Invalid api_base: SSRF protection. If you are pointing to a local or private "
+                    "model server, please set the environment variable ALLOW_SSRF_LOCAL=true "
+                    "to allow local network connections."
+                )
+            }
+        )
     active_api_key = body.get("api_key") or _config["api_key"]
     active_model = body.get("model") or _config["model"]
 
@@ -517,14 +522,16 @@ async def extract_data(body: dict):
             content = re.sub(r"\n```$", "", content)
             content = content.strip()
 
+        parsed = {}
         try:
             parsed = json.loads(content)
         except json.JSONDecodeError:
             match = re.search(r"([\{\[].*[\}\]])", content, re.DOTALL)
             if match:
-                parsed = json.loads(match.group(1))
-            else:
-                raise
+                try:
+                    parsed = json.loads(match.group(1))
+                except json.JSONDecodeError:
+                    pass
 
         return {"extracted_data": parsed}
     except Exception as e:

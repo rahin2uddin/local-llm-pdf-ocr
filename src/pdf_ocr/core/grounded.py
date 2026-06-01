@@ -550,6 +550,9 @@ def _parse_grounded_json(
         else:
             data = [data]  # single object → one-element list
 
+    if not isinstance(data, list):
+        return []
+
     blocks: list[GroundedBlock] = []
     for item in data:
         if not isinstance(item, dict):

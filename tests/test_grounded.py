@@ -427,6 +427,13 @@ class TestPromptedGroundedParser:
         blocks = _parse_grounded_json(raw, page_idx=0, img_w=10, img_h=10)
         assert len(blocks) == 1
 
+    def test_invalid_json_types_return_empty(self):
+        # JSON parsed successfully but not list/dict (e.g. null, true, 123)
+        assert _parse_grounded_json("null", 0, 100, 100) == []
+        assert _parse_grounded_json("123", 0, 100, 100) == []
+        assert _parse_grounded_json("true", 0, 100, 100) == []
+        assert _parse_grounded_json('"just a string"', 0, 100, 100) == []
+
 
 class TestPromptedGroundedEnsureModelLoaded:
     """Pre-flight model verification for the grounded path. Issue #7 was

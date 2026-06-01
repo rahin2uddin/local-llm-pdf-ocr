@@ -119,7 +119,13 @@ def evaluate_node(state: TranslationState):
         # Force accept after 3 tries to prevent infinite loops
         return {"evaluation_score": 1.0, "feedback": ""}
 
-    if len(translated) < len(state["source_chunk"]) * 0.1:
+    # If the source chunk has no letters or is extremely short, skip length ratio check
+    source = state.get("source_chunk", "")
+    has_letters = any(c.isalpha() for c in source)
+    if not has_letters or len(source.strip()) < 5:
+        return {"evaluation_score": 1.0, "feedback": "Looks good"}
+
+    if len(translated) < len(source) * 0.1:
         return {"evaluation_score": 0.0, "feedback": "Translation too short. Ensure you translate the entire chunk."}
 
     return {"evaluation_score": 1.0, "feedback": "Looks good"}
@@ -152,17 +158,82 @@ workflow.add_conditional_edges(
 
 translation_app = workflow.compile()
 
-def run_translation(text: str, target_language: str = "English") -> str:
-    """Convenience function to run the compiled graph on a single chunk."""
-    initial_state = {
-        "source_chunk": text,
-        "target_language": target_language,
-        "rag_context": [],
-        "translated_chunk": "",
-        "evaluation_score": 1.0,
-        "feedback": "",
-        "attempts": 0
-    }
+def chunk_text(text: str, max_chunk_size: int = 4000) -> list[str]:
+    """Splits text into chunks of maximum size, trying to preserve paragraph and sentence boundaries."""
+    if not text:
+        return []
+    if len(text) <= max_chunk_size:
+        return [text]
 
-    result = translation_app.invoke(initial_state)  # type: ignore[call-overload]
-    return result.get("translated_chunk", "")
+    chunks = []
+    current_chunk: list[str] = []
+    current_len = 0
+
+    # Split by paragraphs first
+    paragraphs = text.split("\n\n")
+    for para in paragraphs:
+        if len(para) + 2 > max_chunk_size:
+            # Paragraph itself is too large, split by lines
+            lines = para.split("\n")
+            for line in lines:
+                if len(line) + 1 > max_chunk_size:
+                    # Split by words
+                    words = line.split(" ")
+                    for word in words:
+                        if current_len + len(word) + 1 > max_chunk_size:
+                            if current_chunk:
+                                chunks.append(" ".join(current_chunk))
+                            current_chunk = [word]
+                            current_len = len(word)
+                        else:
+                            current_chunk.append(word)
+                            current_len += len(word) + 1
+                else:
+                    if current_len + len(line) + 1 > max_chunk_size:
+                        if current_chunk:
+                            chunks.append("\n".join(current_chunk))
+                        current_chunk = [line]
+                        current_len = len(line)
+                    else:
+                        current_chunk.append(line)
+                        current_len += len(line) + 1
+        else:
+            if current_len + len(para) + 2 > max_chunk_size:
+                if current_chunk:
+                    chunks.append("\n\n".join(current_chunk))
+                current_chunk = [para]
+                current_len = len(para)
+            else:
+                current_chunk.append(para)
+                current_len += len(para) + 2
+
+    if current_chunk:
+        chunks.append(("\n\n" if "\n\n" in text else "\n").join(current_chunk))
+
+    return [c for c in chunks if c.strip()]
+
+
+def run_translation(text: str, target_language: str = "English") -> str:
+    """Convenience function to run the compiled graph on a text by chunking it to prevent LLM context overflow."""
+    if not text.strip():
+        return ""
+
+    chunks = chunk_text(text)
+    translated_chunks = []
+
+    for chunk in chunks:
+        initial_state = {
+            "source_chunk": chunk,
+            "target_language": target_language,
+            "rag_context": [],
+            "translated_chunk": "",
+            "evaluation_score": 1.0,
+            "feedback": "",
+            "attempts": 0
+        }
+        result = translation_app.invoke(initial_state)  # type: ignore[call-overload]
+        translated = result.get("translated_chunk", "")
+        if translated:
+            translated_chunks.append(translated)
+
+    return "\n\n".join(translated_chunks)

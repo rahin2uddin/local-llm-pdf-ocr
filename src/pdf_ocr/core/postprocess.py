@@ -37,7 +37,7 @@ _ISO_639_MAP = {
     "ru": "rus", "rus": "rus", "russian": "rus",
     "it": "ita", "ita": "ita", "italian": "ita",
     "nl": "nld", "nld": "nld", "dutch": "nld",
-    "sv": "swe", "sv": "swe", "swedish": "swe",
+    "sv": "swe", "swe": "swe", "swedish": "swe",
     "pl": "pol", "pol": "pol", "polish": "pol",
     "tr": "tur", "tur": "tur", "turkish": "tur",
     "zh": "chi_sim", "ja": "jpn", "ko": "kor", "vi": "vie",

@@ -25,6 +25,9 @@
     -   **CLI**: Documented flags for power users and batch automation, Rich progress bars.
 -   **📚 Dense-Page Mode**: Auto-detects densely-laid-out pages (default >60 detected boxes) and switches to per-box OCR — bypasses the failure modes (loops, hallucination, pangram fallback) that full-page OCR exhibits on dense handwritten content. Configurable via `--dense-mode` and `--dense-threshold`.
 -   **🔬 Advanced Enhancements**: Boosts accuracy to 90%+ on complex scripts like handwritten Arabic via **Dual-Engine Consensus** (Tesseract hinting), **Handwriting Enhancement** (Adaptive Binarization), **Safe Dictionary Spellcheck** (pyspellchecker), and **Cross-Page Paragraph Merging**.
+-   **🛡️ SSRF Protection**: Includes automated dynamic DNS resolution to block Server-Side Request Forgery attempts to private IP ranges or internal metadata services from all backend endpoints (e.g. processing, translate, extract, config), with optional developer loopback bypass.
+-   **🔄 Intelligent Chunked Translation**: Employs a robust LangGraph-based workflow that chunks large text blocks while preserving paragraphs and sentence structures, preventing VLM context overflows and enabling full-length translations without quality loss.
+-   **🛠️ One-Click Windows Installer**: Automated installer scripts (`install.bat` and `install.ps1`) to verify or set up `uv`, sync Python environments, configure Docker for local Redis background jobs, and deploy Desktop/Start Menu shortcuts.
 -   **🧪 Tested**: 167-test suite covering DP invariants, reading-order auto-detection, blank-crop / pangram filters, embedding geometry, grounded JSON parsing, and end-to-end runs against the example PDFs.
 
 ---
@@ -104,26 +107,22 @@ LLM_MODEL=allenai/olmocr-2-7b
 
 This project is managed with [`uv`](https://github.com/astral-sh/uv) for lightning-fast dependency management.
 
+#### 🪟 Windows (Automated Installer)
+If you are on Windows, you can use the automated installer:
+1. Double-click `install.bat` (which runs `install.ps1` with elevated privileges).
+2. It will automatically check/install `uv`, sync Python dependencies, verify Docker for local Redis deployment, and create convenient start and stop shortcuts on your **Desktop** and **Programs Start Menu**.
+
+#### 🐧 macOS / Linux (Manual Installation)
 1.  **Install `uv`** (if not installed):
-
     ```bash
-    # macOS / Linux
     curl -LsSf https://astral.sh/uv/install.sh | sh
-    # Windows
-    powershell -c "irm https://astral.sh/uv/install.ps1 | iex"
-    # …or, if you already have Python:
-    pip install uv
     ```
-
 2.  **Clone the repository**:
-
     ```bash
-    git clone https://github.com/ahnafnafee/local-llm-pdf-ocr.git
+    git clone https://github.com/Sifr-r/local-llm-pdf-ocr.git
     cd local-llm-pdf-ocr
     ```
-
 3.  **Sync dependencies**:
-
     ```bash
     uv sync                       # CLI only
     uv sync --extra web           # CLI + FastAPI server
@@ -137,8 +136,9 @@ This project is managed with [`uv`](https://github.com/astral-sh/uv) for lightni
 
 ### 1. 🌐 Web Interface (Recommended)
 
-The easiest way to use the tool. Features a modern dashboard with Dark Mode and Text Preview.
+The easiest way to use the tool. Features a modern dashboard with Dark Mode, Text Preview, Translation, and Schema Extraction capabilities.
 
+#### Running the App (Standard)
 1.  **Start the Server**:
     ```bash
     uv run local-llm-pdf-ocr-server --port 8000
@@ -149,6 +149,23 @@ The easiest way to use the tool. Features a modern dashboard with Dark Mode and 
     -   **Real-time Progress**: Track per-page OCR status.
     -   **Preview**: Click "View Text" to inspect the raw AI extraction.
     -   **Dark Mode**: Toggle the moon icon for a sleek dark theme.
+
+#### 🔄 Asynchronous Translation & Background Tasks (Optional)
+The Web UI includes advanced translation and structured schema extraction. To run the full-fledged asynchronous translation backend using the compiled LangGraph workflow:
+1. **Ensure Redis is running** (e.g., via Docker):
+   ```bash
+   docker run -d --name redis-local-ocr -p 6379:6379 redis
+   ```
+2. **Start the Celery worker**:
+   ```bash
+   uv run --extra web celery -A src.pdf_ocr.api.celery_app worker --loglevel=info -P solo
+   ```
+3. **Start the Web UI**:
+   ```bash
+   uv run local-llm-pdf-ocr-server --port 8000
+   ```
+
+*Note: On Windows, if you used the automated installer (`install.bat`), these background services (Docker Redis, Celery, and FastAPI) are fully orchestrated and run silently when you launch the desktop shortcut.*
 
 ### 2. 💻 Command Line Interface (CLI)
 
@@ -264,6 +281,22 @@ local-llm-pdf-ocr/
 ├── examples/                  # Sample PDFs (digital, hybrid, handwritten)
 └── pyproject.toml             # PEP 621 metadata, build backend, console scripts
 ```
+
+---
+
+## 🔒 Security & SSRF Protection
+
+To ensure total privacy and security, the backend includes automated **Server-Side Request Forgery (SSRF)** protection. If you point the API to cloud backends or external APIs, it strictly prevents requests to private local network endpoints (e.g., `localhost`, `127.0.0.1`, `*.local`, and GCP/AWS internal metadata URLs like `metadata.google.internal`).
+
+### How It Works:
+- **Dynamic DNS Resolution**: The security layer uses dynamic DNS resolution (`socket.getaddrinfo`) to check all resolved IP addresses of targeted hosts. This mitigates DNS rebinding attacks.
+- **Configurable Bypasses**: 
+  - For local developers pointing to a local model server (like LM Studio or Ollama), local loopback connections are allowed by default in the standard configuration.
+  - To customize or override, set the environment variable:
+    ```env
+    ALLOW_SSRF_LOCAL=true   # Allows localhost/private network connections (Default)
+    ALLOW_SSRF_LOCAL=false  # Strictest security: blocks all loopback/private network connections
+    ```
 
 ---
 

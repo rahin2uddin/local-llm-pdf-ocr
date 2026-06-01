@@ -19,4 +19,7 @@ def process_translation_task(self, document_id: str, document_text: str):
     # Run translation
     translated_text = run_translation(document_text)
 
+    if translated_text.startswith("[Translation Error:"):
+        raise ValueError(f"Translation failed: {translated_text}")
+
     return {"document_id": document_id, "translated_text": translated_text}
