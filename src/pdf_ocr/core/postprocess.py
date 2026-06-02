@@ -26,6 +26,21 @@ logger = logging.getLogger("pdf_ocr.postprocess")
 # Lock to prevent concurrent dictionary compilation across pages
 _compile_lock = asyncio.Lock()
 
+
+def _load_custom_dictionary(dict_path: str) -> "SpellChecker":
+    """Synchronous SpellChecker init from a custom dictionary file — call via asyncio.to_thread."""
+    from spellchecker import SpellChecker
+    spell = SpellChecker(language=None, distance=1)
+    spell.word_frequency.load_dictionary(dict_path)
+    return spell
+
+
+def _load_builtin_dictionary(base_lang: str) -> "SpellChecker":
+    """Synchronous SpellChecker init from a built-in language dictionary — call via asyncio.to_thread."""
+    from spellchecker import SpellChecker
+    return SpellChecker(language=base_lang, distance=1)
+
+
 # Mapping from standard language codes to Tesseract 3-letter folder names
 _ISO_639_MAP = {
     "en": "eng", "eng": "eng", "english": "eng",
@@ -125,13 +140,13 @@ class DictionaryPostProcessor:
                 else:
                     logger.debug(f"Raw Tesseract wordlist not found at: {raw_wordlist_path}")
 
-            # Initialize spellchecker
+            # Initialize spellchecker (offloaded — SpellChecker constructor
+            # and load_dictionary both read/unzip files from disk).
             if dict_path:
                 try:
-                    # Initialize with no default language, edit distance 1 for high performance
-                    self.spell = SpellChecker(language=None, distance=1)
-                    # Load compiled dictionary
-                    self.spell.word_frequency.load_dictionary(dict_path)
+                    self.spell = await asyncio.to_thread(
+                        _load_custom_dictionary, dict_path,
+                    )
                     logger.info(f"Successfully loaded custom Tesseract dictionary for '{self.tess_lang}' (Distance: 1).")
                     return
                 except Exception as e:
@@ -140,8 +155,9 @@ class DictionaryPostProcessor:
         # Fallback to pyspellchecker default dictionary (supports en, es, de, fr, pt, ru, ar)
         base_lang = self.lang.split('-')[0].lower()
         try:
-            # Note: We keep default Levenshtein distance = 2 for built-in, but can use 1 for speed
-            self.spell = SpellChecker(language=base_lang, distance=1)
+            self.spell = await asyncio.to_thread(
+                _load_builtin_dictionary, base_lang,
+            )
             logger.info(f"Loaded default pyspellchecker dictionary for '{base_lang}' (Distance: 1).")
         except ValueError:
             logger.warning(f"No spellcheck dictionary available for language '{self.lang}'. Spellcheck disabled.")
