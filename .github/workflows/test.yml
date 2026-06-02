@@ -2,13 +2,13 @@ name: Tests
 
 # Fast-tier validation on every PR + push to main.
 #
-# Scope: runs `pytest -m "not slow"` (~15s, 153+ tests). Skips the `slow`
+# Scope: runs `pytest -m "not slow"`. Skips the `slow`
 # marker because those tests load Surya from HF Hub (~500MB download on
 # first run); not worth the CI minutes for routine validation. Skips
-# `live_llm` markers too — those need a real LLM endpoint we don't have
+# `live_llm` markers too -- those need a real LLM endpoint we don't have
 # in CI.
 #
-# Matrix: Python 3.10 (the floor in pyproject.toml) and 3.13 (latest)
+# Matrix: Python 3.11 (the floor in pyproject.toml) and 3.13
 # to catch version-specific regressions without quadrupling runtime.
 
 on:

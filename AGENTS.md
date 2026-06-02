@@ -1,88 +1,95 @@
 # AGENTS.md
 
-This file tells AI coding agents and new contributors how to work with this codebase.
+This file tells coding agents and contributors how to work with this repository.
 
 ## Quick Start
 
 ```bash
-uv sync                                # install deps
-uv sync --extra web                    # + FastAPI server deps
-uv run local-llm-pdf-ocr input.pdf     # CLI OCR
-uv run local-llm-pdf-ocr-server --port 8000  # web UI
+uv sync
+uv sync --extra web
+uv run local-llm-pdf-ocr input.pdf
+uv run local-llm-pdf-ocr-server --port 8000
 ```
 
-Requires a local OpenAI-compatible VLM endpoint (LM Studio at `http://localhost:1234/v1` by default).
+Real OCR requires an OpenAI-compatible VLM endpoint. The default is LM Studio at `http://localhost:1234/v1`.
 
-## Testing
+## Validation
 
 ```bash
-uv run pytest                          # full suite (179 fast + 23 slow)
-uv run pytest -m "not slow"            # fast tier only (~11s, no Surya model load)
-uv run pytest -m slow                  # integration: real Surya + example PDFs
-uv run pytest tests/test_aligner.py -v # single file
+uv run pytest
+uv run pytest -m "not slow"
+uv run pytest -m slow
+uv run pytest tests/test_aligner.py -v
+uv run ruff check src tests
+uv run ruff format src tests --check
+uv run mypy src
 ```
 
-- `pytest-asyncio` is in **auto mode** -- write `async def test_...` without decorators.
-- Slow tests (`-m slow`) download Surya models (~500MB) on first run.
-- Tests live under `tests/`. Markers: `slow`, `live_llm`.
+- `pytest-asyncio` uses auto mode. Write `async def test_...` without decorators.
+- Slow tests load Surya and may download its model on the first run.
+- Markers are `slow` and `live_llm`.
 
-## Lint / Typecheck
+## Conventions
 
-Ruff (linter/formatter) and Mypy (type checker) are configured in `pyproject.toml`. Run them locally via:
-```bash
-uv run ruff check src tests            # linting
-uv run ruff format src tests --check   # format checking
-uv run ruff format src tests           # auto-format code
-uv run mypy src                        # static type checking
+- Python 3.11 or newer. Use `uv`; do not install dependencies with `pip`.
+- Prefer self-documenting code and docstrings. Add comments only when they clarify non-obvious behavior.
+- Preserve lazy imports for heavy modules in CLI entry points so `--help` remains fast.
+- Keep `tqdm_patch.apply()` before `from surya.detection import DetectionPredictor` in `core/aligner.py`.
+- Keep bboxes normalized as `[x0, y0, x1, y1]` in `0..1` until `PDFHandler.embed_structured_text`.
+- Treat image inputs as first-class inputs. PDF and image paths share the output writer.
+- Keep CLI and web capabilities distinct: advanced enhancement settings are wired through the web router and `OCRPipeline`, but not exposed as CLI flags.
+
+## Pipeline Paths
+
+```text
+PDF/image -> pages -> Surya detection -> sparse: full-page OCR -> DP alignment -> refine --+
+                                    \-> dense: per-box OCR -------------------------------+-> post-process -> searchable PDF
+
+PDF/image -> grounded bbox-native VLM -> post-process -> searchable PDF
 ```
 
-
-## Code Conventions
-
-- **Python >= 3.11**. Deps managed with `uv`; do not use `pip install`.
-- **No comments unless asked** -- code style prefers self-documenting names and docstrings.
-- **Lazy imports** for heavy modules (Surya, PyMuPDF) in CLI entry points so `--help` stays fast.
-- **`tqdm_patch.apply()`** must run before `from surya.detection import DetectionPredictor` in `aligner.py`.
-- **Normalized bboxes**: `[nx0, ny0, nx1, ny1]` in `0..1` everywhere except `embed_structured_text` which converts to PDF points.
-
-## Architecture (Two Pipeline Paths)
-
-```
-                +-- (sparse) -- LLM full-page OCR -- DP line->box alignment -- crop re-OCR --+
-PDF -> images --|                                                                               +-- output_writer -> searchable PDF
-                +-- (dense)  -- per-box OCR (each Surya box -> one LLM crop call) ------------+
-```
-
-- **Hybrid** (default): Surya detect -> LLM OCR -> DP align -> refine -> embed
-- **Grounded** (`--grounded`): bbox-native VLM returns text+bbox in one call, skips Surya/DP/refine
+- Hybrid is the default: Surya detection, VLM OCR, DP alignment, optional refine, optional post-processing, embed.
+- Dense hybrid pages use per-box OCR. `dense_mode="auto"` switches when box count exceeds `dense_threshold`.
+- Grounded OCR uses `grounded_backend=` and skips Surya, DP alignment, and refine.
 
 ## Key Files
 
 | File | Role |
-|------|------|
-| `src/pdf_ocr/cli.py` | CLI entry point |
-| `src/pdf_ocr/server.py` | FastAPI web server |
-| `src/pdf_ocr/pipeline.py` | `OCRPipeline` orchestration seam |
-| `src/pdf_ocr/core/aligner.py` | Surya detect + Needleman-Wunsch DP |
-| `src/pdf_ocr/core/ocr.py` | LLM client (OpenAI-compat) |
-| `src/pdf_ocr/core/pdf.py` | PDF/image I/O + sandwich-PDF embedding |
-| `src/pdf_ocr/core/grounded.py` | Grounded backends + JSON parsers |
+| --- | --- |
+| `src/pdf_ocr/cli.py` | CLI parser and Rich progress output |
+| `src/pdf_ocr/server.py` | FastAPI application and server entry point |
+| `src/pdf_ocr/pipeline.py` | Shared hybrid and grounded orchestration |
+| `src/pdf_ocr/core/aligner.py` | Surya detection and DP alignment |
+| `src/pdf_ocr/core/ocr.py` | LiteLLM OCR calls, prompts, limits, and filters |
+| `src/pdf_ocr/core/pdf.py` | PDF/image conversion and sandwich-PDF embedding |
+| `src/pdf_ocr/core/grounded.py` | Grounded backends and bbox JSON parsers |
 | `src/pdf_ocr/core/postprocess.py` | Dictionary spellcheck |
-| `src/pdf_ocr/core/translation.py` | LangGraph translation workflow |
-| `src/pdf_ocr/api/routers/` | FastAPI route handlers |
-| `src/pdf_ocr/utils/litellm_provider.py` | Shared litellm provider detection |
-| `src/pdf_ocr/utils/image.py` | Crop + blank-detection utility |
+| `src/pdf_ocr/core/translation.py` | Optional LangGraph translation workflow |
+| `src/pdf_ocr/api/routers/ocr.py` | OCR, translation, extraction, and job routes |
+| `src/pdf_ocr/api/routers/config.py` | Runtime configuration and model discovery |
+| `src/pdf_ocr/utils/security.py` | SSRF target validation |
+| `src/pdf_ocr/utils/litellm_provider.py` | LiteLLM provider selection |
 
 ## Extension Points
 
-All pipeline phases are injected into `OCRPipeline`:
-- `aligner=` -- swap layout detection (e.g. DETR)
-- `ocr_processor=` -- swap LLM backend
-- `output_writer=` -- swap output format (e.g. EPUB)
-- `grounded_backend=` -- use bbox-native VLM
+`OCRPipeline` accepts injected components:
+
+- `aligner=`: layout detection and text alignment
+- `ocr_processor=`: page and crop OCR backend
+- `pdf_handler=`: input conversion and default PDF writer
+- `output_writer=`: alternate output generation
+- `grounded_backend=`: bbox-native OCR path
+
+## Web Notes
+
+- Browser translation and structured extraction use synchronous endpoints and do not require Redis.
+- `/api/translate/async` uses Celery, Redis, and LangGraph.
+- `ALLOW_SSRF_LOCAL=true` is the local-development default. Set it to `false` when exposing the server to untrusted users.
+- Web runtime settings are initialized in `api/routers/config.py`.
 
 ## Known Tech Debt
 
-- The translation feature (`core/translation.py`, `api/tasks.py`, `api/celery_app.py`) depends on Celery + Redis + LangGraph + ChromaDB but these are listed as core deps, not optional.
-- The API routers (`api/routers/ocr.py`) have the translate/extract endpoints mixed with the core OCR endpoint -- consider splitting into separate routers.
-- `ZAIHostedOCR` in `core/grounded.py` is a skeleton with untested endpoint paths.
+- Translation dependencies are core dependencies even though asynchronous translation is optional.
+- `api/routers/ocr.py` mixes OCR, translation, extraction, and asynchronous task routes.
+- The grounded web route instantiates hybrid components even though `OCRPipeline` skips them in grounded mode.
+- `ZAIHostedOCR` remains an experimental backend.

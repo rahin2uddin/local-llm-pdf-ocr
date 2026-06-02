@@ -8,8 +8,8 @@ name: Release
 #   3. This workflow fires (push to main with pyproject.toml in the diff).
 #   4. If the version doesn't already have a matching tag, the job:
 #       a. builds the wheel + sdist (so a broken build never produces a tag),
-#       b. updates the @vX.Y.Z pin example in README.md,
-#       c. pushes that README commit to main,
+#       b. refreshes any @vX.Y.Z pin example present in README.md,
+#       c. pushes a README commit when that replacement changes the file,
 #       d. tags v<version>,
 #       e. creates a GitHub release with auto-generated notes and the wheel
 #          attached so users can `uv tool install <release-asset-url>` directly.
