@@ -12,18 +12,22 @@ Validates:
 from __future__ import annotations
 
 import asyncio
+import base64
+import io
 import json
 from pathlib import Path
 from types import SimpleNamespace
 
 import fitz
 import pytest
+from PIL import Image
 
 from pdf_ocr.core.grounded import (
     GroundedBlock,
     GroundedResponse,
     PromptedGroundedOCR,
     _parse_grounded_json,
+    _rasterize_to_jpeg_pages,
     parse_glm_layout_details,
     parse_zai_response,
 )
@@ -32,6 +36,26 @@ from pdf_ocr.core.pdf import PDFHandler
 from pdf_ocr.pipeline import OCRPipeline
 
 FIXTURES = Path(__file__).parent / "fixtures"
+
+
+def test_grounded_pdf_rasterization_skips_intermediate_jpeg_decode(
+    example_pdfs: dict[str, Path], monkeypatch,
+):
+    """PDF pixmaps should convert directly before the final thumbnail JPEG."""
+    original_open = Image.open
+
+    def reject_bytesio(source, *args, **kwargs):
+        if isinstance(source, io.BytesIO):
+            raise AssertionError("unexpected intermediate JPEG decode")
+        return original_open(source, *args, **kwargs)
+
+    monkeypatch.setattr(Image, "open", reject_bytesio)
+    pages = _rasterize_to_jpeg_pages(str(example_pdfs["digital.pdf"]), 1024, 150)
+
+    assert len(pages) == 1
+    encoded, width, height = pages[0]
+    assert max(width, height) <= 1024
+    assert original_open(io.BytesIO(base64.b64decode(encoded))).format == "JPEG"
 
 
 # --- parsers ----------------------------------------------------------------

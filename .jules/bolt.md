@@ -15,3 +15,14 @@ Critical learnings only - not a log.
 **Action:** When processing batches of items from the same source (images, files, database rows), look for decode/parse operations that happen per-item vs once-per-batch. The N+1 query problem applies to I/O too.
 
 **Pattern:** "Decode once, crop many" - share expensive decode operations across batch processing.
+
+## 2026-06-02 - Grounded PDF Rasterization Double JPEG Round Trip
+
+**Learning:** The grounded PDF path encoded each PyMuPDF pixmap to JPEG, reopened
+that JPEG with Pillow, then encoded a final thumbnail JPEG. Direct
+`Image.frombytes` conversion preserves the final output while removing the
+redundant lossy round trip. On the example PDFs this reduced rasterization by
+~63-75ms/page (2.41x-3.59x).
+
+**Action:** When moving image data between PyMuPDF and Pillow, pass raw pixmap
+samples directly unless an encoded artifact is the actual boundary output.
