@@ -369,7 +369,7 @@ async def process_pdf(
 async def get_text(job_id: str):
     job_id = re.sub(r'[^a-zA-Z0-9_-]', '', job_id)
     text_path = os.path.join(tempfile.gettempdir(), f"text_{job_id}.json")
-    if os.path.exists(text_path):
+    if await asyncio.to_thread(os.path.exists, text_path):
         return FileResponse(
             text_path,
             media_type="application/json",
