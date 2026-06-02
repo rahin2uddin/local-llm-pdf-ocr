@@ -35,7 +35,11 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any, Protocol
 
+import httpx
+import litellm
 from dotenv import load_dotenv
+
+from pdf_ocr.utils.litellm_provider import resolve_custom_provider
 
 load_dotenv()
 
@@ -268,7 +272,11 @@ class ZAIHostedOCR:
         await pipeline.run("in.pdf", "out.pdf")
     """
 
-    # TODO: confirm these against the live service.
+    # TODO(external): confirm these paths against the live Z.AI service.
+    # The endpoint routes and submit request-body format are inferred from
+    # ocr.z.ai network traffic and have not been verified with credentials.
+    # To confirm: capture the Network tab on ocr.z.ai during an upload, or
+    # request the API docs from Z.AI support.
     SUBMIT_PATH = "/api/paas/v4/ocr/submit"
     TASK_PATH = "/api/paas/v4/ocr/task"
 
@@ -289,14 +297,12 @@ class ZAIHostedOCR:
         pdf_path: str,
         progress: ProgressCallback | None = None,
     ) -> GroundedResponse:
-        import asyncio
-
-        import httpx
-
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
         async with httpx.AsyncClient(timeout=60) as client:
             # 1. Submit
+            if progress is not None:
+                await progress("ocr", 0, 0, "Submitting to Z.AI...")
             with open(pdf_path, "rb") as f:
                 resp = await client.post(
                     self.base_url + self.SUBMIT_PATH,
@@ -307,10 +313,18 @@ class ZAIHostedOCR:
             task_id = resp.json()["data"]["task_id"]
 
             # 2. Poll until completed
+            max_polls = int(self.timeout_s / self.poll_interval_s)
             elapsed = 0.0
+            poll_count = 0
             while elapsed < self.timeout_s:
                 await asyncio.sleep(self.poll_interval_s)
                 elapsed += self.poll_interval_s
+                poll_count += 1
+                if progress is not None:
+                    await progress(
+                        "ocr", poll_count, max_polls,
+                        f"Z.AI OCR polling ({elapsed:.0f}s)...",
+                    )
                 r = await client.get(
                     f"{self.base_url}{self.TASK_PATH}/{task_id}",
                     headers=headers,
@@ -448,12 +462,10 @@ class PromptedGroundedOCR:
 
         # 2. Call the VLM per page, streaming progress and isolating failures
         # so one bad page doesn't tank a multi-page document.
-        import litellm
         sem = asyncio.Semaphore(max(1, self.concurrency))
         total_pages = len(page_imgs)
 
         litellm_model = self.model
-        from pdf_ocr.utils.litellm_provider import resolve_custom_provider
         custom_provider = resolve_custom_provider(litellm_model)
 
         async def run_one(page_idx: int) -> tuple[int, list[GroundedBlock]]:

@@ -16,19 +16,19 @@ class SilentTqdm:
     - Manual updates: pbar = tqdm(total=...); pbar.update()
     - Context manager: with tqdm(...) as pbar:
     """
-    def __init__(self, iterable=None, *args, **kwargs):
+    def __init__(self, iterable=None, **kwargs):
         self.iterable = iterable or []
 
     def __iter__(self):
         return iter(self.iterable)
 
-    def update(self, *args, **kwargs):
+    def update(self, n=1):
         pass
 
     def close(self):
         pass
 
-    def set_description(self, *args, **kwargs):
+    def set_description(self, desc):
         pass
 
     def __enter__(self):
