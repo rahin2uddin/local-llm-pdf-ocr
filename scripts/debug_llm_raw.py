@@ -17,7 +17,7 @@ from pdf_ocr import OCRProcessor, PDFHandler
 async def main(input_path: str) -> None:
     handler = PDFHandler()
     ocr = OCRProcessor()
-    images = handler.convert_to_images(input_path)
+    images = await asyncio.to_thread(handler.convert_to_images, input_path)
 
     for page_num in sorted(images):
         print(f"\n=== page {page_num} ===")
