@@ -1,6 +1,4 @@
-# only was really looking to update the GUI from the original, some artifacting in readme and still links to  old github, leaving as is to credit, everything but docker (you have to do that manually) installs with one click installer (this also starts the server in the background, when you click on the app the first time it takes awhile so give some time) Works Via openai endpoint test over local network, using 4070. Look to improve this could someone smart have a look at it?
-
-# 📄 Local LLM PDF OCR and Translator
+# 📄 Local LLM PDF OCR
 
 [![Python](https://img.shields.io/badge/Python-3.11%2B-blue?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Modern-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
@@ -121,7 +119,7 @@ If you are on Windows, you can use the automated installer:
     ```
 2.  **Clone the repository**:
     ```bash
-    git clone https://github.com/ahnafnafee/local-llm-pdf-ocr.git
+    git clone https://github.com/Sifr-r/local-llm-pdf-ocr.git
     cd local-llm-pdf-ocr
     ```
 3.  **Sync dependencies**:

@@ -180,3 +180,18 @@ cython_debug/
 .cursorignore
 .cursorindexingignore
 .claude/
+
+# Custom Resources
+/resources/
+
+# Scratch / working directory
+/scratch/
+/chroma_db/
+
+# Stale root-level artifacts
+*.bat
+*.vbs
+/git_index.html
+/original_index*.html
+/temp_old_index.html
+

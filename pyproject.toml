@@ -58,9 +58,9 @@ local-llm-pdf-ocr = "pdf_ocr.cli:main"
 local-llm-pdf-ocr-server = "pdf_ocr.server:main"
 
 [project.urls]
-Homepage = "https://github.com/ahnafnafee/local-llm-pdf-ocr"
-Repository = "https://github.com/ahnafnafee/local-llm-pdf-ocr"
-Issues = "https://github.com/ahnafnafee/local-llm-pdf-ocr/issues"
+Homepage = "https://github.com/Sifr-r/local-llm-pdf-ocr"
+Repository = "https://github.com/Sifr-r/local-llm-pdf-ocr"
+Issues = "https://github.com/Sifr-r/local-llm-pdf-ocr/issues"
 
 [build-system]
 requires = ["hatchling"]
