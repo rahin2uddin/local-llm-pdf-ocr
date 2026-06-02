@@ -87,6 +87,46 @@ _NON_CONTENT_LABELS = frozenset({
 })
 
 
+def _rasterize_to_jpeg_pages(
+    path: str, max_image_dim: int, dpi: int,
+) -> list[tuple[str, int, int]]:
+    """Synchronous PDF/image rasterization — call via asyncio.to_thread.
+
+    Extracted from `PromptedGroundedOCR.ocr_document` so the blocking
+    fitz.open / get_pixmap / PIL calls don't stall the async event loop.
+    """
+    import fitz
+    from PIL import Image, ImageSequence
+
+    from pdf_ocr.core.pdf import _is_image_path
+
+    page_imgs: list[tuple[str, int, int]] = []
+
+    def _emit(img: Image.Image) -> None:
+        img = img.convert("RGB")
+        img.thumbnail((max_image_dim, max_image_dim))
+        buf = io.BytesIO()
+        img.save(buf, format="JPEG", quality=80)
+        page_imgs.append(
+            (base64.b64encode(buf.getvalue()).decode(), img.width, img.height)
+        )
+
+    if _is_image_path(path):
+        with Image.open(path) as src:
+            for frame in ImageSequence.Iterator(src):
+                _emit(frame.copy())
+    else:
+        doc = fitz.open(path)
+        try:
+            for page in doc:
+                pix = page.get_pixmap(dpi=dpi)
+                _emit(Image.open(io.BytesIO(pix.tobytes("jpg", jpg_quality=70))))
+        finally:
+            doc.close()
+
+    return page_imgs
+
+
 # --- parsers ---------------------------------------------------------------
 
 
@@ -399,37 +439,12 @@ class PromptedGroundedOCR:
         pdf_path: str,
         progress: ProgressCallback | None = None,
     ) -> GroundedResponse:
-        import fitz
-        from PIL import Image, ImageSequence
-
-        from pdf_ocr.core.pdf import _is_image_path
-
         # 1. Rasterize every page, remembering dimensions.
-        # For image inputs (JPEG/PNG/TIFF) skip the PDF round-trip and read
-        # pixels directly — this both saves work and supports multi-frame TIFF.
-        page_imgs: list[tuple[str, int, int]] = []  # (b64, width, height)
-
-        def _emit(img: Image.Image) -> None:
-            img = img.convert("RGB")
-            img.thumbnail((self.max_image_dim, self.max_image_dim))
-            buf = io.BytesIO()
-            img.save(buf, format="JPEG", quality=80)
-            page_imgs.append(
-                (base64.b64encode(buf.getvalue()).decode(), img.width, img.height)
-            )
-
-        if _is_image_path(pdf_path):
-            with Image.open(pdf_path) as src:
-                for frame in ImageSequence.Iterator(src):
-                    _emit(frame.copy())
-        else:
-            doc = fitz.open(pdf_path)
-            try:
-                for page in doc:
-                    pix = page.get_pixmap(dpi=self.dpi)
-                    _emit(Image.open(io.BytesIO(pix.tobytes("jpg", jpg_quality=70))))
-            finally:
-                doc.close()
+        # Offloaded to a worker thread — fitz.open / get_pixmap are blocking
+        # CPU+IO work that would otherwise stall the event loop.
+        page_imgs = await asyncio.to_thread(
+            _rasterize_to_jpeg_pages, pdf_path, self.max_image_dim, self.dpi,
+        )
 
         # 2. Call the VLM per page, streaming progress and isolating failures
         # so one bad page doesn't tank a multi-page document.
