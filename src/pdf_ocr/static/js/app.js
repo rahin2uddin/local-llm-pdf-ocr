@@ -108,9 +108,9 @@ function connectWS() {
 }
 
 function updateProgress(message, percent) {
-    if (refs.statusText) refs.statusText.innerText = message;
+    if (refs.statusText) refs.statusText.textContent = message;
     if (refs.progressBar) refs.progressBar.style.width = `${percent}%`;
-    if (refs.subStatus) refs.subStatus.innerText = `${percent}%`;
+    if (refs.subStatus) refs.subStatus.textContent = `${percent}%`;
 }
 
 // 2. Drag & Drop & Upload Workflows
@@ -193,6 +193,12 @@ async function triggerDocuVerseOCR(file) {
             throw new Error(err.error || 'OCR Processing failed');
         }
 
+        const textArtifactId = response.headers.get('X-Text-Artifact-Id');
+        if (!textArtifactId) {
+            throw new Error('OCR completed but text artifact metadata was missing');
+        }
+        state.currentJobId = textArtifactId;
+
         const blob = await response.blob();
         state.resultBlob = blob;
         state.resultFilename = `OCR_${file.name}`;
@@ -218,7 +224,8 @@ async function triggerDocuVerseOCR(file) {
 
 async function fetchExtractedText() {
     try {
-        const textResp = await fetch(`/text/${clientId}?t=${Date.now()}`);
+        if (!state.currentJobId) throw new Error("Text artifact ID is not available");
+        const textResp = await fetch(`/text/${encodeURIComponent(state.currentJobId)}?t=${Date.now()}`);
         if (!textResp.ok) throw new Error("Could not fetch extracted text JSON");
         
         const textMap = await textResp.json();
@@ -400,9 +407,7 @@ function setupAIFeatures() {
         refs.extractBtn.disabled = true;
         refs.extractBtn.innerText = "Extracting JSON...";
         if(refs.extractedJsonRaw) refs.extractedJsonRaw.value = "AI is parsing structured fields...";
-        if(refs.extractedJsonVisualCards) {
-            refs.extractedJsonVisualCards.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">Extracting...</div>';
-        }
+        renderExtractedJsonStatus('Extracting...');
         
         try {
             const parsedJson = await extractData(text, template, customPrompt);
@@ -419,9 +424,7 @@ function setupAIFeatures() {
         } catch (e) {
             showToast(`Extraction failed: ${e.message}`, 'error');
             if(refs.extractedJsonRaw) refs.extractedJsonRaw.value = `Error: ${e.message}`;
-            if(refs.extractedJsonVisualCards) {
-                refs.extractedJsonVisualCards.innerHTML = `<div style="color:var(--error); font-size:0.75rem; text-align:center; padding:1rem;">Error: ${e.message}</div>`;
-            }
+            renderExtractedJsonStatus(`Error: ${e.message}`, { isError: true });
         } finally {
             refs.extractBtn.disabled = false;
             refs.extractBtn.innerText = "Extract Structured Data";
@@ -447,12 +450,12 @@ function setupAIFeatures() {
 function renderExtractedVisualCards(json) {
     const grid = refs.extractedJsonVisualCards;
     if (!grid) return;
-    grid.innerHTML = '';
-    
+    grid.replaceChildren();
+
     // Flat display visualizer
     const entries = Object.entries(json);
     if (entries.length === 0) {
-        grid.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">Empty schema returned.</div>';
+        renderExtractedJsonStatus('Empty schema returned.');
         return;
     }
     
@@ -470,10 +473,16 @@ function renderExtractedVisualCards(json) {
         // Truncate if long
         if (textVal.length > 150) textVal = textVal.substring(0, 147) + "...";
         
-        card.innerHTML = `
-            <span class="json-key">${key.replace(/_/g, ' ')}</span>
-            <span class="json-val">${textVal}</span>
-        `;
+        const keySpan = document.createElement('span');
+        keySpan.className = 'json-key';
+        keySpan.textContent = key.replace(/_/g, ' ');
+
+        const valueSpan = document.createElement('span');
+        valueSpan.className = 'json-val';
+        valueSpan.textContent = textVal;
+
+        card.appendChild(keySpan);
+        card.appendChild(valueSpan);
         grid.appendChild(card);
     });
 }

@@ -1,11 +1,34 @@
+import logging
 import os
 
 from fastapi import APIRouter
 from fastapi.responses import JSONResponse
 
+from pdf_ocr.api.schemas import ConfigUpdate
+from pdf_ocr.api.services.security import SAFE_API_BASE_ERROR, SERVER_ERROR_MESSAGE
 from pdf_ocr.utils.security import is_ssrf_target
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+
+
+def _env_int(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        logger.warning("Ignoring invalid integer environment value for %s", name)
+        return default
+
+
+def _env_bool(name: str, default: bool) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() not in {"0", "false", "no", "off"}
+
 
 # ---------------------------------------------------------------------------
 # In-memory configuration store – initialised from environment variables
@@ -14,23 +37,24 @@ _config: dict = {
     "api_base": os.getenv("LLM_API_BASE", "http://localhost:1234/v1"),
     "api_key": os.getenv("LLM_API_KEY", "lm-studio"),
     "model": os.getenv("LLM_MODEL", "allenai/olmocr-2-7b"),
-    "concurrency": int(os.getenv("OCR_CONCURRENCY", "3")),
-    "dpi": int(os.getenv("OCR_DPI", "200")),
+    "concurrency": _env_int("OCR_CONCURRENCY", 3),
+    "dpi": _env_int("OCR_DPI", 200),
     "dense_mode": os.getenv("OCR_DENSE_MODE", "auto"),
-    "dense_threshold": int(os.getenv("OCR_DENSE_THRESHOLD", "60")),
-    "max_image_dim": int(os.getenv("OCR_MAX_IMAGE_DIM", "1024")),
-    "refine": os.getenv("OCR_REFINE", "1") != "0",
-    "verify_model": os.getenv("OCR_VERIFY_MODEL", "1") != "0",
+    "dense_threshold": _env_int("OCR_DENSE_THRESHOLD", 60),
+    "max_image_dim": _env_int("OCR_MAX_IMAGE_DIM", 1024),
+    "refine": _env_bool("OCR_REFINE", True),
+    "verify_model": _env_bool("OCR_VERIFY_MODEL", True),
     "pipeline_mode": os.getenv("OCR_PIPELINE_MODE", "hybrid"),
-    "self_correction": os.getenv("OCR_SELF_CORRECTION", "0") != "0",
-    "binarize": os.getenv("OCR_BINARIZE", "0") != "0",
-    "dual_engine": os.getenv("OCR_DUAL_ENGINE", "0") != "0",
+    "self_correction": _env_bool("OCR_SELF_CORRECTION", False),
+    "binarize": _env_bool("OCR_BINARIZE", False),
+    "dual_engine": _env_bool("OCR_DUAL_ENGINE", False),
     "spellcheck": os.getenv("OCR_SPELLCHECK", "none"),
-    "cross_page": os.getenv("OCR_CROSS_PAGE", "0") != "0",
+    "cross_page": _env_bool("OCR_CROSS_PAGE", False),
 }
 
 
 # ---- Configuration --------------------------------------------------------
+
 
 @router.get("/api/config")
 async def get_config():
@@ -38,45 +62,36 @@ async def get_config():
     safe_config = _config.copy()
     if safe_config.get("api_key") and safe_config["api_key"] != "lm-studio":
         key = safe_config["api_key"]
-        safe_config["api_key"] = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "********"
+        safe_config["api_key"] = (
+            f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "********"
+        )
     return JSONResponse(content=safe_config)
 
 
 @router.post("/api/config")
-async def update_config(body: dict):
+async def update_config(body: ConfigUpdate):
     """
     Update runtime configuration.
 
-    Only keys already present in the config store are accepted; unknown
-    keys are silently ignored.
+    Unknown keys and invalid value types fail validation instead of being
+    silently ignored.
     """
-    for key in _config:
-        if key in body:
-            expected = type(_config[key])
-            try:
-                # Don't overwrite api_key with the masked version if the user didn't change it
-                if key == "api_key" and ("..." in body[key] or body[key] == "********"):
-                    continue
-                val = expected(body[key])
-                if key == "api_base" and is_ssrf_target(val):
-                    return JSONResponse(
-                        status_code=403,
-                        content={
-                            "error": (
-                                "Invalid api_base: SSRF protection. If you are pointing to a local or private "
-                                "model server, please set the environment variable ALLOW_SSRF_LOCAL=true "
-                                "to allow local network connections."
-                            )
-                        }
-                    )
-                _config[key] = val
-            except (ValueError, TypeError):
-                pass  # skip values that cannot be coerced
+    values = body.model_dump(exclude_unset=True)
+    for key, val in values.items():
+        if (
+            key == "api_key"
+            and isinstance(val, str)
+            and ("..." in val or val == "********")
+        ):
+            continue
+        if key == "api_base" and is_ssrf_target(val):
+            return JSONResponse(status_code=403, content={"error": SAFE_API_BASE_ERROR})
+        _config[key] = val.value if hasattr(val, "value") else val
     return await get_config()
 
 
-
 # ---- Model discovery ------------------------------------------------------
+
 
 @router.get("/api/models")
 async def list_models():
@@ -86,16 +101,7 @@ async def list_models():
     Uses the current ``api_base`` from the config store.
     """
     if is_ssrf_target(_config["api_base"]):
-        return JSONResponse(
-            status_code=403,
-            content={
-                "error": (
-                    "Invalid api_base: SSRF protection. If you are pointing to a local or private "
-                    "model server, please set the environment variable ALLOW_SSRF_LOCAL=true "
-                    "to allow local network connections."
-                )
-            }
-        )
+        return JSONResponse(status_code=403, content={"error": SAFE_API_BASE_ERROR})
     try:
         from openai import AsyncOpenAI
 
@@ -106,7 +112,6 @@ async def list_models():
         response = await client.models.list()
         model_ids = [m.id for m in response.data] if response.data else []
         return JSONResponse(content={"models": model_ids})
-    except Exception as exc:
-        return JSONResponse(content={"models": [], "error": str(exc)})
-
-
+    except Exception:
+        logger.exception("Model discovery failed")
+        return JSONResponse(content={"models": [], "error": SERVER_ERROR_MESSAGE})

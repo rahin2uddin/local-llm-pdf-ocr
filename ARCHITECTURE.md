@@ -32,6 +32,8 @@ PDF/image -> grounded bbox-native VLM OCR -> optional post-process -> searchable
 | `src/pdf_ocr/api/routers/ocr.py` | OCR, translation, extraction, and asynchronous job routes |
 | `src/pdf_ocr/api/routers/config.py` | Runtime configuration and model discovery |
 | `src/pdf_ocr/api/routers/websocket.py` | WebSocket progress transport |
+| `src/pdf_ocr/api/schemas/` | Typed FastAPI boundary schemas for runtime configuration, OCR form settings, translation, and extraction requests |
+| `src/pdf_ocr/api/services/security.py` | API upload validation, stable error constants, temporary-file cleanup, and opaque text artifact IDs |
 | `src/pdf_ocr/api/tasks.py` | Celery OCR task execution |
 | `src/pdf_ocr/utils/image.py` | Image crop, blank-region detection, and crop encoding helpers |
 | `src/pdf_ocr/utils/security.py` | SSRF target validation |
@@ -63,3 +65,18 @@ form until embedding.
 | `src/pdf_ocr/core/grounded.py` | Convert PDF pixmaps directly into Pillow images before emitting the final grounded OCR thumbnail JPEG |
 | `tests/test_grounded.py` | Guard against restoring the redundant intermediate JPEG decode |
 | `ARCHITECTURE.md` | Record the existing module layout and the direct pixmap conversion invariant |
+
+### 2026-06-02: Stage 1 API and browser safety hardening
+
+| File | Responsibility |
+| --- | --- |
+| `src/pdf_ocr/api/schemas/requests.py` | Validate config JSON, OCR multipart settings, translation requests, and extraction requests with explicit enums, booleans, and numeric ranges |
+| `src/pdf_ocr/api/services/security.py` | Enforce streaming upload byte limits, content-signature upload type detection, stable API error messages, and server-issued text artifact IDs |
+| `src/pdf_ocr/api/routers/config.py` | Apply typed config validation, SSRF checks, safe environment parsing, and non-leaking model discovery errors |
+| `src/pdf_ocr/api/routers/ocr.py` | Apply typed OCR/AI boundary validation, hardened upload dispatch, opaque text artifact retrieval, SSRF checks, and stable client-facing errors |
+| `src/pdf_ocr/utils/security.py` | Fail closed for malformed, unsupported, or unresolvable URLs and only allow local/private endpoints when `ALLOW_SSRF_LOCAL=true` is explicitly set |
+| `src/pdf_ocr/static/js/app.js` | Use server-issued text artifact IDs and render extraction status/errors/cards without HTML injection |
+| `src/pdf_ocr/static/js/state_and_api.js` | Build model select placeholder with DOM APIs before appending model-controlled option text |
+| `src/pdf_ocr/static/js/workspace_ui.js` | Provide safe DOM helpers for clearing elements and rendering extraction status cards |
+| `tests/test_api_safety.py` | Cover config validation, SSRF fail-closed behavior, streaming upload validation, opaque text artifacts, stable API errors, and static JS sink removal |
+| `tests/test_security_qa.py` | Keep extraction JSON parsing deterministic under fail-closed SSRF validation |

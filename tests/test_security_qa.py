@@ -22,13 +22,31 @@ def test_is_ssrf_target_defaults():
     # But when ALLOW_SSRF_LOCAL is "false", let's verify SSRF catches local addresses
     with patch.dict(os.environ, {"ALLOW_SSRF_LOCAL": "false"}):
         with patch("socket.getaddrinfo") as mock_getaddrinfo:
+
             def side_effect(host, port, *args, **kwargs):
-                if host in ("localhost", "127.0.0.1", "192.168.1.1", "10.0.0.1", "127.0.0.1.nip.io"):
-                    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))]
+                if host in (
+                    "localhost",
+                    "127.0.0.1",
+                    "192.168.1.1",
+                    "10.0.0.1",
+                    "127.0.0.1.nip.io",
+                ):
+                    return [
+                        (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", 80))
+                    ]
                 elif "openai.com" in host:
-                    return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("104.18.3.161", 80))]
+                    return [
+                        (
+                            socket.AF_INET,
+                            socket.SOCK_STREAM,
+                            6,
+                            "",
+                            ("104.18.3.161", 80),
+                        )
+                    ]
                 else:
                     raise socket.gaierror(-2, "Name or service not known")
+
             mock_getaddrinfo.side_effect = side_effect
 
             assert is_ssrf_target("http://localhost:1234/v1") is True
@@ -68,7 +86,7 @@ def test_evaluate_node_minimal_input_skips_loop():
         "translated_chunk": "",
         "evaluation_score": 1.0,
         "feedback": "",
-        "attempts": 1
+        "attempts": 1,
     }
 
     result = evaluate_node(punctuation_state)
@@ -85,7 +103,7 @@ def test_evaluate_node_normal_input_fails_correctly():
         "translated_chunk": "",  # Empty translation
         "evaluation_score": 1.0,
         "feedback": "",
-        "attempts": 1
+        "attempts": 1,
     }
 
     result = evaluate_node(bad_state)
@@ -98,7 +116,10 @@ def test_celery_task_raises_value_error_on_translation_error():
     # With bind=True, Celery's .run() method automatically binds the task instance to 'self'.
     # We patch 'update_state' to prevent it from complaining about missing task context during test run.
     with patch.object(process_translation_task, "update_state"):
-        with patch("pdf_ocr.core.translation.run_translation", return_value="[Translation Error: Connection refused]"):
+        with patch(
+            "pdf_ocr.core.translation.run_translation",
+            return_value="[Translation Error: Connection refused]",
+        ):
             with pytest.raises(ValueError) as exc_info:
                 process_translation_task.run("doc_123", "Hello World")
             assert "Translation failed" in str(exc_info.value)
@@ -112,17 +133,29 @@ def test_extract_data_robust_json_parsing(mock_loads, mock_search):
     mock_search.return_value = None  # No matching bracket/braces found
 
     async def mock_acompletion(*args, **kwargs):
-        return SimpleNamespace(choices=[
-            SimpleNamespace(message=SimpleNamespace(content="Bad model output with no JSON"))
-        ])
+        return SimpleNamespace(
+            choices=[
+                SimpleNamespace(
+                    message=SimpleNamespace(content="Bad model output with no JSON")
+                )
+            ]
+        )
 
     with patch("litellm.acompletion", mock_acompletion):
         # We call the FastAPI handler synchronously via standard coroutine run
-        response = asyncio.run(extract_data({
-            "text": "Hello World",
-            "template": "invoice",
-            "api_base": "http://api.openai.com/v1"
-        }))
+        with patch("pdf_ocr.utils.security.socket.getaddrinfo") as mock_getaddrinfo:
+            mock_getaddrinfo.return_value = [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("104.18.3.161", 443))
+            ]
+            response = asyncio.run(
+                extract_data(
+                    {
+                        "text": "Hello World",
+                        "template": "invoice",
+                        "api_base": "http://api.openai.com/v1",
+                    }
+                )
+            )
 
         # Verify it handled the error gracefully and returned empty extracted_data rather than raising exception
         assert isinstance(response, dict)
