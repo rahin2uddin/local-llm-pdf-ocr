@@ -4,7 +4,6 @@ import asyncio
 import logging
 import os
 import tempfile
-import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -34,38 +33,6 @@ class UploadValidationError(ValueError):
     def __init__(self, message: str, status_code: int = 400):
         super().__init__(message)
         self.status_code = status_code
-
-
-class TextArtifactStore:
-    """In-memory mapping from server-issued opaque IDs to extracted text files."""
-
-    def __init__(self) -> None:
-        self._paths: dict[str, str] = {}
-
-    def issue_id(self) -> str:
-        return uuid.uuid4().hex
-
-    def put(self, artifact_id: str, path: str) -> None:
-        self._paths[artifact_id] = path
-
-    def get(self, artifact_id: str) -> str | None:
-        if not _is_opaque_id(artifact_id):
-            return None
-        return self._paths.get(artifact_id)
-
-    def pop(self, artifact_id: str) -> str | None:
-        if not _is_opaque_id(artifact_id):
-            return None
-        return self._paths.pop(artifact_id, None)
-
-    def clear(self) -> list[str]:
-        paths = list(self._paths.values())
-        self._paths.clear()
-        return paths
-
-
-def _is_opaque_id(value: str) -> bool:
-    return len(value) == 32 and all(ch in "0123456789abcdef" for ch in value)
 
 
 def detect_upload_suffix(header: bytes) -> str:

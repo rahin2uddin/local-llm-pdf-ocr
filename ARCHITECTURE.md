@@ -34,7 +34,7 @@ PDF/image -> grounded bbox-native VLM OCR -> optional post-process -> searchable
 | `src/pdf_ocr/resources/dictionaries/` | Packaged compiled spellcheck dictionaries loaded before legacy repository-root dictionaries |
 | `src/pdf_ocr/api/routers/ocr.py` | OCR, translation, extraction, and asynchronous job routes |
 | `src/pdf_ocr/api/routers/config.py` | Runtime configuration and model discovery |
-| `src/pdf_ocr/api/routers/websocket.py` | WebSocket progress transport |
+| `src/pdf_ocr/api/routers/websocket.py` | Token-bound WebSocket progress transport and progress session issuance |
 | `src/pdf_ocr/api/schemas/` | Typed FastAPI boundary schemas for runtime configuration, OCR form settings, translation, and extraction requests |
 | `src/pdf_ocr/api/services/security.py` | API upload validation, stable error constants, temporary-file cleanup, and opaque text artifact IDs |
 | `src/pdf_ocr/api/tasks.py` | Optional Celery translation task execution |

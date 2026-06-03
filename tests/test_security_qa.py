@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import os
 import socket
 from types import SimpleNamespace
@@ -157,10 +156,10 @@ def test_extract_data_robust_json_parsing():
                         "text": "Hello World",
                         "template": "invoice",
                         "api_base": "http://api.openai.com/v1",
-                    }
+                        "api_key": "test-key",
+                        "model": "openai/test-model",
+                    },
                 )
             )
 
-        # Verify it handled the error gracefully and returned empty extracted_data rather than raising exception
-        assert isinstance(response, dict)
-        assert response["extracted_data"] == {}
+        assert response == {}

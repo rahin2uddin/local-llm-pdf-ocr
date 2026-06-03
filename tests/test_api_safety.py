@@ -15,7 +15,8 @@ pytest.importorskip("fastapi")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from pdf_ocr.api.routers import config, ocr
+from pdf_ocr.api.routers import ai, config, ocr, websocket
+from pdf_ocr.api.services.artifacts import TextArtifactStore
 from pdf_ocr.api.services.security import UploadValidationError, save_validated_upload
 from pdf_ocr.utils.security import is_ssrf_target
 
@@ -36,7 +37,9 @@ class _AsyncUpload:
 def _api_client() -> TestClient:
     app = FastAPI()
     app.include_router(config.router)
+    app.include_router(ai.router)
     app.include_router(ocr.router)
+    app.include_router(websocket.router)
     return TestClient(app)
 
 
@@ -159,13 +162,83 @@ def test_process_issues_opaque_text_artifact_ids_and_prevents_client_id_lookup(
     assert second.status_code == 200
     first_id = first.headers["X-Text-Artifact-Id"]
     second_id = second.headers["X-Text-Artifact-Id"]
+    first_token = first.headers["X-Text-Artifact-Token"]
+    second_token = second.headers["X-Text-Artifact-Token"]
     assert first_id != second_id
+    assert first_token != second_token
     assert len(first_id) == 32
 
-    assert client.get("/text/same-client").status_code == 404
-    text_response = client.get(f"/text/{first_id}")
+    assert (
+        client.get(
+            "/text/same-client",
+            headers={"Authorization": f"Bearer {first_token}"},
+        ).status_code
+        == 404
+    )
+    assert client.get(f"/text/{first_id}").status_code == 403
+    assert (
+        client.get(
+            f"/text/{first_id}",
+            headers={"Authorization": f"Bearer {second_token}"},
+        ).status_code
+        == 403
+    )
+    text_response = client.get(
+        f"/text/{first_id}",
+        headers={"Authorization": f"Bearer {first_token}"},
+    )
     assert text_response.status_code == 200
     assert text_response.json() == {"0": ["safe text"]}
+
+
+def test_text_artifact_retrieval_expires_router_store(tmp_path):
+    clock = SimpleNamespace(value=0.0)
+
+    def now() -> float:
+        return clock.value
+
+    original_store = ocr._text_artifacts
+    try:
+        store = TextArtifactStore(ttl_seconds=5, clock=now, artifact_dir=tmp_path)
+        ocr._text_artifacts = store
+        handle = store.create({0: ["expiring text"]})
+        client = _api_client()
+
+        response = client.get(
+            f"/text/{handle.artifact_id}",
+            headers={"Authorization": f"Bearer {handle.token}"},
+        )
+        assert response.status_code == 200
+
+        clock.value = 6.0
+        response = client.get(
+            f"/text/{handle.artifact_id}",
+            headers={"Authorization": f"Bearer {handle.token}"},
+        )
+        assert response.status_code == 404
+        assert not Path(handle.path).exists()
+    finally:
+        ocr._text_artifacts = original_store
+
+
+def test_progress_session_uses_token_bound_websocket_channels():
+    client = _api_client()
+
+    session_response = client.post(
+        "/api/progress/session", json={"client_id": "visible-client"}
+    )
+    assert session_response.status_code == 200
+    session = session_response.json()
+    assert session["channel_id"] != "visible-client"
+    assert session["session_token"] != "visible-client"
+
+    with client.websocket_connect(
+        f"/ws/{session['channel_id']}?token={session['session_token']}"
+    ):
+        assert websocket.manager.is_authorized(
+            session["channel_id"], session["session_token"]
+        )
+        assert not websocket.manager.is_authorized(session["channel_id"], "A" * 32)
 
 
 def test_translate_error_response_does_not_expose_internal_exception():
