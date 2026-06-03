@@ -48,13 +48,33 @@ window.addEventListener('DOMContentLoaded', async () => {
     setupAIFeatures();
     
     // Connect WebSocket progress listener immediately
-    connectWS();
+    connectWS().catch((err) => {
+        console.error('Progress connection failed:', err);
+    });
 });
 
 // 1. WebSocket Progress Orchestration
-function connectWS() {
+async function ensureProgressSession() {
+    if (state.progressChannelId && state.progressSessionToken) return;
+
+    const response = await fetch('/api/progress/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ client_id: clientId })
+    });
+    if (!response.ok) throw new Error('Could not create progress session');
+
+    const session = await response.json();
+    state.progressChannelId = session.channel_id;
+    state.progressSessionToken = session.session_token;
+}
+
+async function connectWS() {
+    await ensureProgressSession();
     const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-    state.ws = new WebSocket(`${protocol}//${window.location.host}/ws/${clientId}`);
+    const channel = encodeURIComponent(state.progressChannelId);
+    const token = encodeURIComponent(state.progressSessionToken);
+    state.ws = new WebSocket(`${protocol}//${window.location.host}/ws/${channel}?token=${token}`);
     
     state.ws.onmessage = (event) => {
         try {
@@ -103,14 +123,14 @@ function connectWS() {
             refs.connStatus.title = 'Disconnected';
         }
         if(refs.connectionStatusDot) refs.connectionStatusDot.className = 'status-dot offline';
-        setTimeout(connectWS, 5000);
+        setTimeout(() => { connectWS().catch(console.error); }, 5000);
     };
 }
 
 function updateProgress(message, percent) {
-    if (refs.statusText) refs.statusText.innerText = message;
+    if (refs.statusText) refs.statusText.textContent = message;
     if (refs.progressBar) refs.progressBar.style.width = `${percent}%`;
-    if (refs.subStatus) refs.subStatus.innerText = `${percent}%`;
+    if (refs.subStatus) refs.subStatus.textContent = `${percent}%`;
 }
 
 // 2. Drag & Drop & Upload Workflows
@@ -175,6 +195,9 @@ async function triggerDocuVerseOCR(file) {
     const formData = new FormData();
     formData.append('file', file);
     formData.append('client_id', clientId);
+    await ensureProgressSession();
+    formData.append('progress_channel', state.progressChannelId);
+    formData.append('progress_token', state.progressSessionToken);
     
     // Append form parameters
     const settings = getFormSettings();
@@ -192,6 +215,14 @@ async function triggerDocuVerseOCR(file) {
             const err = await response.json();
             throw new Error(err.error || 'OCR Processing failed');
         }
+
+        const textArtifactId = response.headers.get('X-Text-Artifact-Id');
+        const textArtifactToken = response.headers.get('X-Text-Artifact-Token');
+        if (!textArtifactId || !textArtifactToken) {
+            throw new Error('OCR completed but text artifact metadata was missing');
+        }
+        state.currentJobId = textArtifactId;
+        state.currentJobToken = textArtifactToken;
 
         const blob = await response.blob();
         state.resultBlob = blob;
@@ -218,7 +249,10 @@ async function triggerDocuVerseOCR(file) {
 
 async function fetchExtractedText() {
     try {
-        const textResp = await fetch(`/text/${clientId}?t=${Date.now()}`);
+        if (!state.currentJobId || !state.currentJobToken) throw new Error("Text artifact metadata is not available");
+        const textResp = await fetch(`/text/${encodeURIComponent(state.currentJobId)}?t=${Date.now()}`, {
+            headers: { Authorization: `Bearer ${state.currentJobToken}` }
+        });
         if (!textResp.ok) throw new Error("Could not fetch extracted text JSON");
         
         const textMap = await textResp.json();
@@ -400,9 +434,7 @@ function setupAIFeatures() {
         refs.extractBtn.disabled = true;
         refs.extractBtn.innerText = "Extracting JSON...";
         if(refs.extractedJsonRaw) refs.extractedJsonRaw.value = "AI is parsing structured fields...";
-        if(refs.extractedJsonVisualCards) {
-            refs.extractedJsonVisualCards.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">Extracting...</div>';
-        }
+        renderExtractedJsonStatus('Extracting...');
         
         try {
             const parsedJson = await extractData(text, template, customPrompt);
@@ -419,9 +451,7 @@ function setupAIFeatures() {
         } catch (e) {
             showToast(`Extraction failed: ${e.message}`, 'error');
             if(refs.extractedJsonRaw) refs.extractedJsonRaw.value = `Error: ${e.message}`;
-            if(refs.extractedJsonVisualCards) {
-                refs.extractedJsonVisualCards.innerHTML = `<div style="color:var(--error); font-size:0.75rem; text-align:center; padding:1rem;">Error: ${e.message}</div>`;
-            }
+            renderExtractedJsonStatus(`Error: ${e.message}`, { isError: true });
         } finally {
             refs.extractBtn.disabled = false;
             refs.extractBtn.innerText = "Extract Structured Data";
@@ -447,12 +477,12 @@ function setupAIFeatures() {
 function renderExtractedVisualCards(json) {
     const grid = refs.extractedJsonVisualCards;
     if (!grid) return;
-    grid.innerHTML = '';
-    
+    grid.replaceChildren();
+
     // Flat display visualizer
     const entries = Object.entries(json);
     if (entries.length === 0) {
-        grid.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">Empty schema returned.</div>';
+        renderExtractedJsonStatus('Empty schema returned.');
         return;
     }
     
@@ -470,10 +500,16 @@ function renderExtractedVisualCards(json) {
         // Truncate if long
         if (textVal.length > 150) textVal = textVal.substring(0, 147) + "...";
         
-        card.innerHTML = `
-            <span class="json-key">${key.replace(/_/g, ' ')}</span>
-            <span class="json-val">${textVal}</span>
-        `;
+        const keySpan = document.createElement('span');
+        keySpan.className = 'json-key';
+        keySpan.textContent = key.replace(/_/g, ' ');
+
+        const valueSpan = document.createElement('span');
+        valueSpan.className = 'json-val';
+        valueSpan.textContent = textVal;
+
+        card.appendChild(keySpan);
+        card.appendChild(valueSpan);
         grid.appendChild(card);
     });
 }

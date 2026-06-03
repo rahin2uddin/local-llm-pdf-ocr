@@ -2,6 +2,25 @@
 // Unified Visual Document Viewport & UI Notifications
 // --------------------------------------------------------------------------
 
+function clearElementChildren(element) {
+    if (element) element.replaceChildren();
+}
+
+function createExtractedJsonStatusCard(message, { isError = false } = {}) {
+    const card = document.createElement('div');
+    card.style.fontSize = '0.75rem';
+    card.style.textAlign = 'center';
+    card.style.padding = '1rem';
+    card.style.color = isError ? 'var(--error)' : 'var(--text-muted)';
+    card.textContent = message;
+    return card;
+}
+
+function renderExtractedJsonStatus(message, options = {}) {
+    if (!refs.extractedJsonVisualCards) return;
+    refs.extractedJsonVisualCards.replaceChildren(createExtractedJsonStatusCard(message, options));
+}
+
 // 1. Load active document into the canvas visualizer
 async function loadWorkspaceDocument(file) {
     workspaceState.activeFile = file;
@@ -85,7 +104,7 @@ async function renderWorkspacePage(pageNum) {
 
         // Render transparent selectable text layer for searchability
         if (refs.workspaceTextLayer) {
-            refs.workspaceTextLayer.innerHTML = '';
+            clearElementChildren(refs.workspaceTextLayer);
             refs.workspaceTextLayer.style.width = `${viewport.width}px`;
             refs.workspaceTextLayer.style.height = `${viewport.height}px`;
 
@@ -119,9 +138,9 @@ async function renderWorkspaceImage(file) {
         canvas.width = width;
         canvas.height = height;
         ctx.drawImage(img, 0, 0, width, height);
-        
-        if (refs.workspaceTextLayer) refs.workspaceTextLayer.innerHTML = '';
-        if (refs.workspaceBboxSvg) refs.workspaceBboxSvg.innerHTML = '';
+
+        clearElementChildren(refs.workspaceTextLayer);
+        clearElementChildren(refs.workspaceBboxSvg);
     };
     img.src = URL.createObjectURL(file);
 }
@@ -129,7 +148,7 @@ async function renderWorkspaceImage(file) {
 // 4. Draw layout bounding boxes overlay
 function drawLayoutBboxes(pageIdx, viewport) {
     if (!refs.workspaceBboxSvg) return;
-    refs.workspaceBboxSvg.innerHTML = '';
+    clearElementChildren(refs.workspaceBboxSvg);
     
     const bboxes = workspaceState.layoutBboxes ? workspaceState.layoutBboxes[pageIdx] : null;
     if (!bboxes || !Array.isArray(bboxes)) return;
@@ -244,9 +263,7 @@ refs.clearFileBtn?.addEventListener('click', () => {
     if (refs.textContent) refs.textContent.value = '';
     if (refs.translatedMarkdownContent) refs.translatedMarkdownContent.value = '';
     if (refs.extractedJsonRaw) refs.extractedJsonRaw.value = '';
-    if (refs.extractedJsonVisualCards) {
-        refs.extractedJsonVisualCards.innerHTML = '<div style="font-size:0.75rem; color:var(--text-muted); text-align:center; padding:1rem;">No data extracted yet.</div>';
-    }
+    renderExtractedJsonStatus('No data extracted yet.');
 });
 
 // 7. Visual UI Toast Notifications

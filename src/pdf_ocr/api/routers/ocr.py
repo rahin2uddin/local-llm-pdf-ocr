@@ -1,17 +1,16 @@
 import asyncio
 import json
+import logging
 import os
 import re
-import shutil
 import tempfile
 import time
 import uuid
-from datetime import datetime, timezone
-from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
-from fastapi import APIRouter, File, Form, UploadFile
+from fastapi import APIRouter, File, Form, Header, Query, UploadFile
 from fastapi.responses import FileResponse, JSONResponse
+from pydantic import ValidationError
 from starlette.background import BackgroundTask
 
 from pdf_ocr import (
@@ -21,55 +20,75 @@ from pdf_ocr import (
     PDFHandler,
     PromptedGroundedOCR,
 )
-from pdf_ocr.core.pdf import IMAGE_EXTENSIONS
+from pdf_ocr.api.schemas import ExtractionRequest, ProcessSettings, TranslationRequest
+from pdf_ocr.api.services.artifacts import (
+    ArtifactAccessDeniedError,
+    ArtifactNotFoundError,
+    InvalidArtifactReferenceError,
+    PageText,
+    TextArtifactStore,
+)
+from pdf_ocr.api.services.jobs import JobHistory, JobStatus
+from pdf_ocr.api.services.progress import ProgressService
+from pdf_ocr.api.services.security import (
+    SAFE_API_BASE_ERROR,
+    SERVER_ERROR_MESSAGE,
+    UploadValidationError,
+    cleanup_files,
+    save_validated_upload,
+)
 from pdf_ocr.utils import is_ssrf_target
 
 from .config import _config
 from .websocket import manager
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
+_text_artifacts = TextArtifactStore()
+_job_history = JobHistory()
+_progress_service = ProgressService()
 
 
 def _cleanup(*paths):
-    for path in paths:
-        try:
-            if os.path.exists(path):
-                os.remove(path)
-        except Exception:
-            pass
+    cleanup_files(*paths)
+
+
+def _validation_error_response(exc: ValidationError) -> JSONResponse:
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": "Invalid request parameters.",
+            "detail": exc.errors(include_context=False),
+        },
+    )
+
+
+def _stable_server_error(status_code: int = 500) -> JSONResponse:
+    return JSONResponse(
+        status_code=status_code, content={"error": SERVER_ERROR_MESSAGE}
+    )
+
+
+def _extract_bearer_token(authorization: str | None) -> str | None:
+    if not authorization:
+        return None
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token.strip():
+        return None
+    return token.strip()
+
+
+def _path_exists(path: str) -> bool:
+    return os.path.exists(path)
+
 
 # ---------------------------------------------------------------------------
 # In-memory job history – capped at 50 entries (FIFO)
 # ---------------------------------------------------------------------------
-_MAX_JOBS = 50
-_job_history: list[dict] = []
-
-
-# ---------------------------------------------------------------------------
-# Pipeline stage → overall-percent mapping
-# ---------------------------------------------------------------------------
-_STAGE_WEIGHTS = {
-    "convert": (0, 15),
-    "detect": (15, 25),
-    "ocr": (25, 75),
-    "refine": (75, 90),
-    "embed": (90, 100),
-}
-
-
 def stage_to_percent(stage: str, current: int, total: int) -> int:
     """Map a pipeline stage + sub-progress into a 0-100 overall percent."""
-    lo, hi = _STAGE_WEIGHTS.get(stage, (0, 100))
-    if total <= 0:
-        return lo
-    current = min(current, total)
-    return lo + int((current / total) * (hi - lo))
+    return _progress_service.stage_to_percent(stage, current, total)
 
-
-
-# ---------------------------------------------------------------------------
-# Helper: record a job in history
-# ---------------------------------------------------------------------------
 
 def _record_job(
     job_id: str,
@@ -78,52 +97,46 @@ def _record_job(
     pipeline_mode: str,
     pages: str | None,
     duration_s: float,
-    status: str,
+    status: JobStatus,
 ) -> None:
-    """Append a job record to the in-memory history list (max _MAX_JOBS)."""
-    entry = {
-        "id": job_id,
-        "filename": filename,
-        "model": model,
-        "pipeline_mode": pipeline_mode,
-        "pages": pages,
-        "duration_s": round(duration_s, 2),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
-        "status": status,
-    }
-    _job_history.append(entry)
-    # Trim oldest entries when the list exceeds the cap
-    while len(_job_history) > _MAX_JOBS:
-        _job_history.pop(0)
-
+    """Append a validated job record to the capped in-memory history."""
+    _job_history.record(
+        job_id=job_id,
+        filename=filename,
+        model=model,
+        pipeline_mode=pipeline_mode,
+        pages=pages,
+        duration_s=duration_s,
+        status=status,
+    )
 
 
 # ---- Job history ----------------------------------------------------------
 
+
 @router.get("/api/jobs")
 async def get_jobs():
     """Return the recent job history (newest first)."""
-    return sorted(_job_history, key=lambda j: j["timestamp"], reverse=True)
+    return _job_history.list()
+
 
 @router.delete("/api/jobs")
 async def clear_jobs():
-    """Clear the recent job history and delete their associated text files."""
-    for job in _job_history:
-        job_id = job.get("id")
-        if job_id:
-            text_path = os.path.join(tempfile.gettempdir(), f"text_{job_id}.json")
-            await asyncio.to_thread(_cleanup, text_path)
+    """Clear recent job history and current text artifacts."""
+    await asyncio.to_thread(_text_artifacts.clear)
     _job_history.clear()
     return {"status": "ok"}
 
 
-
 # ---- PDF / image processing ----------------------------------------------
+
 
 @router.post("/process")
 async def process_pdf(
     file: UploadFile = File(...),
-    client_id: str = Form(...),
+    client_id: str | None = Form(None),
+    progress_channel: str | None = Form(None),
+    progress_token: str | None = Form(None),
     api_base: str | None = Form(None),
     api_key: str | None = Form(None),
     model: str | None = Form(None),
@@ -147,108 +160,86 @@ async def process_pdf(
     Every optional parameter falls back to the in-memory config store when
     not supplied by the caller.
     """
-    def parse_int_safe(val: str | None, default: int, min_val: int | None = None, max_val: int | None = None) -> int:
-        if val is None:
-            res = default
-        else:
-            try:
-                res = int(val)
-            except ValueError:
-                res = default
-        if min_val is not None:
-            res = max(min_val, res)
-        if max_val is not None:
-            res = min(max_val, res)
-        return res
-
-    # -- Resolve effective parameters from form values or config defaults ----
-    active_api_base = api_base if api_base is not None else _config["api_base"]
-    if is_ssrf_target(active_api_base):
-        return JSONResponse(
-            status_code=403,
-            content={
-                "error": (
-                    "Invalid api_base: SSRF protection. If you are pointing to a local or private "
-                    "model server, please set the environment variable ALLOW_SSRF_LOCAL=true "
-                    "to allow local network connections."
-                )
+    try:
+        settings = ProcessSettings.model_validate(
+            {
+                "api_base": api_base if api_base is not None else _config["api_base"],
+                "api_key": api_key if api_key is not None else _config["api_key"],
+                "model": model if model is not None else _config["model"],
+                "pipeline_mode": pipeline_mode
+                if pipeline_mode is not None
+                else _config["pipeline_mode"],
+                "dpi": dpi if dpi is not None else _config["dpi"],
+                "concurrency": concurrency
+                if concurrency is not None
+                else _config["concurrency"],
+                "dense_mode": dense_mode
+                if dense_mode is not None
+                else _config["dense_mode"],
+                "dense_threshold": dense_threshold
+                if dense_threshold is not None
+                else _config["dense_threshold"],
+                "pages": pages,
+                "refine": refine if refine is not None else _config["refine"],
+                "max_image_dim": max_image_dim
+                if max_image_dim is not None
+                else _config["max_image_dim"],
+                "self_correction": self_correction
+                if self_correction is not None
+                else _config["self_correction"],
+                "binarize": binarize if binarize is not None else _config["binarize"],
+                "dual_engine": dual_engine
+                if dual_engine is not None
+                else _config["dual_engine"],
+                "spellcheck": spellcheck
+                if spellcheck is not None
+                else _config["spellcheck"],
+                "cross_page": cross_page
+                if cross_page is not None
+                else _config["cross_page"],
             }
         )
-    active_api_key = api_key if api_key is not None else _config["api_key"]
-    active_model = model if model is not None else _config["model"]
-    active_pipeline_mode = pipeline_mode if pipeline_mode is not None else _config["pipeline_mode"]
-    active_dpi = parse_int_safe(dpi, _config["dpi"], min_val=10, max_val=600)
-    active_concurrency = parse_int_safe(concurrency, _config["concurrency"], min_val=1, max_val=64)
-    active_max_image_dim = parse_int_safe(max_image_dim, _config["max_image_dim"], min_val=100, max_val=4096)
+    except ValidationError as exc:
+        return _validation_error_response(exc)
 
-    eff_dense_mode: str = (
-        dense_mode if dense_mode is not None else _config["dense_mode"]
-    )
-    eff_dense_threshold: int = parse_int_safe(dense_threshold, _config["dense_threshold"], min_val=0)
-    eff_pages: str | None = pages if pages else None  # None means "all pages"
-    eff_refine: bool = (
-        refine.lower() == "true" if refine is not None else _config["refine"]
-    )
-    eff_self_correction: bool = (
-        self_correction.lower() == "true" if self_correction is not None else _config["self_correction"]
-    )
-    eff_binarize: bool = (
-        binarize.lower() == "true" if binarize is not None else _config["binarize"]
-    )
-    eff_dual_engine: bool = (
-        dual_engine.lower() == "true" if dual_engine is not None else _config["dual_engine"]
-    )
-    eff_spellcheck: str = (
-        spellcheck if spellcheck is not None else _config["spellcheck"]
-    )
-    eff_cross_page: bool = (
-        cross_page.lower() == "true" if cross_page is not None else _config["cross_page"]
-    )
+    if is_ssrf_target(settings.api_base):
+        return JSONResponse(status_code=403, content={"error": SAFE_API_BASE_ERROR})
 
-    # -- Determine file suffix (image vs PDF) --------------------------------
-    original_suffix = Path(file.filename or "upload.pdf").suffix.lower()
-    if original_suffix in IMAGE_EXTENSIONS:
-        tmp_suffix = original_suffix
-    else:
-        tmp_suffix = ".pdf"
+    try:
+        upload = await save_validated_upload(file)
+    except UploadValidationError as exc:
+        return JSONResponse(status_code=exc.status_code, content={"error": str(exc)})
 
-    file_size = getattr(file, "size", None)
-    if file_size is not None and file_size > 100 * 1024 * 1024:
-        return JSONResponse(status_code=413, content={"error": "File too large. Maximum size is 100MB."})
-
-    # -- Write upload to a temp file -----------------------------------------
-    with tempfile.NamedTemporaryFile(delete=False, suffix=tmp_suffix) as tmp_input:
-        await asyncio.to_thread(shutil.copyfileobj, file.file, tmp_input)
-        input_path = tmp_input.name
-
-    client_id = re.sub(r'[^a-zA-Z0-9_-]', '', client_id)
-    if not client_id:
-        client_id = uuid.uuid4().hex
-
+    input_path = upload.path
+    progress_target = (
+        progress_channel
+        if manager.is_authorized(progress_channel, progress_token)
+        else None
+    )
     output_path = os.path.join(tempfile.gettempdir(), f"output_{uuid.uuid4()}.pdf")
-    text_path = os.path.join(tempfile.gettempdir(), f"text_{client_id}.json")
-    job_id = client_id  # use client_id as the job identifier
+    text_path: str | None = None
+    job_id = uuid.uuid4().hex
     t_start = time.monotonic()
 
     try:
-        await manager.send_progress(client_id, "Initializing...", 5, stage="init")
+        await manager.send_progress(progress_target, "Initializing...", 5, stage="init")
 
         # -- Build the pipeline based on the selected mode -------------------
         backend: Any
-        if active_pipeline_mode == "grounded":
+        if settings.pipeline_mode == "grounded":
             backend = PromptedGroundedOCR(
-                api_base=active_api_base,
-                api_key=active_api_key,
-                model=active_model,
-                max_image_dim=active_max_image_dim,
-                concurrency=active_concurrency,
+                api_base=settings.api_base,
+                api_key=settings.api_key,
+                model=settings.model,
+                max_image_dim=settings.max_image_dim,
+                concurrency=settings.concurrency,
             )
             pipeline = OCRPipeline(
                 aligner=HybridAligner(),
                 ocr_processor=OCRProcessor(
-                    api_base=active_api_base,
-                    api_key=active_api_key,
-                    model=active_model,
+                    api_base=settings.api_base,
+                    api_key=settings.api_key,
+                    model=settings.model,
                 ),
                 pdf_handler=PDFHandler(),
                 grounded_backend=backend,
@@ -256,9 +247,9 @@ async def process_pdf(
         else:
             # Default: hybrid mode
             backend = OCRProcessor(
-                api_base=active_api_base,
-                api_key=active_api_key,
-                model=active_model,
+                api_base=settings.api_base,
+                api_key=settings.api_key,
+                model=settings.model,
             )
             pipeline = OCRPipeline(
                 aligner=HybridAligner(),
@@ -271,7 +262,20 @@ async def process_pdf(
 
         # Automatically skip verification for cloud models since /v1/models is an LM Studio/Ollama extension
         # LiteLLM prefixes or known cloud hosts indicate it's not a local server.
-        is_cloud = any(active_model.startswith(prefix) for prefix in ("openai/", "anthropic/", "gemini/", "deepseek/", "groq/", "vertex_ai/")) or "api.openai.com" in active_api_base
+        is_cloud = (
+            any(
+                settings.model.startswith(prefix)
+                for prefix in (
+                    "openai/",
+                    "anthropic/",
+                    "gemini/",
+                    "deepseek/",
+                    "groq/",
+                    "vertex_ai/",
+                )
+            )
+            or "api.openai.com" in settings.api_base
+        )
         if is_cloud:
             verify = False
 
@@ -281,95 +285,120 @@ async def process_pdf(
         # -- Progress callback -----------------------------------------------
         async def on_progress(stage, current, total, message):
             await manager.send_progress(
-                client_id, message, stage_to_percent(stage, current, total), stage=stage
+                progress_target,
+                message,
+                stage_to_percent(stage, current, total),
+                stage=stage,
             )
 
         # -- Run the pipeline ------------------------------------------------
         pages_text = await pipeline.run(
             input_path,
             output_path,
-            dpi=active_dpi,
-            pages=eff_pages,
-            concurrency=active_concurrency,
-            refine=eff_refine,
-            max_image_dim=active_max_image_dim,
-            dense_threshold=eff_dense_threshold,
-            dense_mode=eff_dense_mode,
-            self_correction=eff_self_correction,
-            binarize=eff_binarize,
-            dual_engine=eff_dual_engine,
-            spellcheck=eff_spellcheck,
-            cross_page=eff_cross_page,
+            dpi=settings.dpi,
+            pages=settings.pages,
+            concurrency=settings.concurrency,
+            refine=settings.refine,
+            max_image_dim=settings.max_image_dim,
+            dense_threshold=settings.dense_threshold,
+            dense_mode=settings.dense_mode,
+            self_correction=settings.self_correction,
+            binarize=settings.binarize,
+            dual_engine=settings.dual_engine,
+            spellcheck=settings.spellcheck,
+            cross_page=settings.cross_page,
             progress=on_progress,
         )
 
-        # -- Persist extracted text for later retrieval ----------------------
-        def _save_text():
-            with open(text_path, "w", encoding="utf-8") as f:
-                json.dump({str(k): v for k, v in pages_text.items()}, f)
-        await asyncio.to_thread(_save_text)
+        # -- Persist extracted text for token-bound later retrieval ----------
+        artifact_handle = await asyncio.to_thread(
+            _text_artifacts.create, cast(PageText, pages_text)
+        )
+        text_path = artifact_handle.path
+        job_id = artifact_handle.artifact_id
 
         duration_s = time.monotonic() - t_start
         _record_job(
             job_id=job_id,
             filename=file.filename or "unknown",
-            model=active_model,
-            pipeline_mode=active_pipeline_mode,
-            pages=eff_pages,
+            model=settings.model,
+            pipeline_mode=settings.pipeline_mode,
+            pages=settings.pages,
             duration_s=duration_s,
-            status="done",
+            status="complete",
         )
 
         await manager.send_progress(
-            client_id, "Done! Preparing download...", 100, stage="complete"
+            progress_target, "Done! Preparing download...", 100, stage="complete"
         )
 
-        return FileResponse(
+        response = FileResponse(
             output_path,
             media_type="application/pdf",
             filename=f"ocr_{file.filename}",
             background=BackgroundTask(_cleanup, input_path, output_path),
         )
+        response.headers["X-Text-Artifact-Id"] = artifact_handle.artifact_id
+        response.headers["X-Text-Artifact-Token"] = artifact_handle.token
+        return response
 
     except ValueError as ve:
         duration_s = time.monotonic() - t_start
         _record_job(
             job_id=job_id,
             filename=file.filename or "unknown",
-            model=active_model,
-            pipeline_mode=active_pipeline_mode,
-            pages=eff_pages,
+            model=settings.model,
+            pipeline_mode=settings.pipeline_mode,
+            pages=settings.pages,
             duration_s=duration_s,
             status="error",
         )
-        await manager.send_progress(client_id, f"Invalid Input: {ve}", 0, stage="error")
+        logger.warning("OCR processing rejected invalid input: %s", ve)
+        await manager.send_progress(progress_target, "Invalid input.", 0, stage="error")
         _cleanup(input_path, output_path, text_path)
-        return JSONResponse(status_code=400, content={"error": str(ve)})
+        return JSONResponse(status_code=400, content={"error": "Invalid input."})
 
-    except Exception as e:
+    except Exception:
         duration_s = time.monotonic() - t_start
         _record_job(
             job_id=job_id,
             filename=file.filename or "unknown",
-            model=active_model,
-            pipeline_mode=active_pipeline_mode,
-            pages=eff_pages,
+            model=settings.model,
+            pipeline_mode=settings.pipeline_mode,
+            pages=settings.pages,
             duration_s=duration_s,
             status="error",
         )
-        await manager.send_progress(client_id, f"Error: {e}", 0, stage="error")
+        logger.exception("OCR processing failed")
+        await manager.send_progress(
+            progress_target, "Processing failed.", 0, stage="error"
+        )
         _cleanup(input_path, output_path, text_path)
-        return JSONResponse(status_code=500, content={"error": str(e)})
-
+        return _stable_server_error()
 
 
 # ---- Text retrieval -------------------------------------------------------
 
-@router.get("/text/{job_id}")
-async def get_text(job_id: str):
-    job_id = re.sub(r'[^a-zA-Z0-9_-]', '', job_id)
-    text_path = os.path.join(tempfile.gettempdir(), f"text_{job_id}.json")
-    if await asyncio.to_thread(os.path.exists, text_path):
+
+@router.get("/text/{artifact_id}")
+async def get_text(
+    artifact_id: str,
+    token: str | None = Query(default=None),
+    authorization: str | None = Header(default=None),
+):
+    access_token = _extract_bearer_token(authorization) or token
+    if not access_token:
+        return JSONResponse(status_code=403, content={"error": "Text access denied"})
+
+    try:
+        text_path = _text_artifacts.get(artifact_id, access_token)
+    except (InvalidArtifactReferenceError, ArtifactNotFoundError):
+        return JSONResponse(status_code=404, content={"error": "Text not found"})
+    except ArtifactAccessDeniedError:
+        return JSONResponse(status_code=403, content={"error": "Text access denied"})
+
+    exists = await asyncio.to_thread(_path_exists, text_path)
+    if exists:
         return FileResponse(
             text_path,
             media_type="application/json",
@@ -379,31 +408,23 @@ async def get_text(job_id: str):
 
 # ---- AI Translation & Schema Extraction ----------------------------------
 
+
 @router.post("/api/translate")
-async def translate_text(body: dict):
+async def translate_text(body: TranslationRequest):
     """
     Translate OCR'ed document text into the specified target language.
     """
-    text = body.get("text", "")
-    target_lang = body.get("target_language", "Spanish")
+    text = body.text
+    target_lang = body.target_language
 
     if not text.strip():
         return {"translated_text": ""}
 
-    active_api_base = body.get("api_base") or _config["api_base"]
+    active_api_base = body.api_base or _config["api_base"]
     if is_ssrf_target(active_api_base):
-        return JSONResponse(
-            status_code=403,
-            content={
-                "error": (
-                    "Invalid api_base: SSRF protection. If you are pointing to a local or private "
-                    "model server, please set the environment variable ALLOW_SSRF_LOCAL=true "
-                    "to allow local network connections."
-                )
-            }
-        )
-    active_api_key = body.get("api_key") or _config["api_key"]
-    active_model = body.get("model") or _config["model"]
+        return JSONResponse(status_code=403, content={"error": SAFE_API_BASE_ERROR})
+    active_api_key = body.api_key or _config["api_key"]
+    active_model = body.model or _config["model"]
 
     prompt = (
         f"Translate the following document text into {target_lang}. "
@@ -417,6 +438,7 @@ async def translate_text(body: dict):
         import litellm
 
         from pdf_ocr.utils.litellm_provider import resolve_custom_provider
+
         custom_provider = resolve_custom_provider(active_model)
 
         response = await litellm.acompletion(
@@ -425,42 +447,35 @@ async def translate_text(body: dict):
             api_base=active_api_base,
             api_key=active_api_key,
             temperature=0.3,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            messages=[{"role": "user", "content": prompt}],
         )
         translated = (response.choices[0].message.content or "").strip()
         return {"translated_text": translated}
-    except Exception as e:
-        return JSONResponse(status_code=500, content={"error": f"Translation failed: {str(e)}"})
+    except Exception:
+        logger.exception("Translation request failed")
+        return _stable_server_error()
 
 
 @router.post("/api/extract")
-async def extract_data(body: dict):
+async def extract_data(body: ExtractionRequest):
     """
     Extract structured data from OCR text using predefined templates or custom prompts.
     """
-    text = body.get("text", "")
-    template = body.get("template", "invoice").lower()
-    custom_prompt = body.get("custom_prompt", "")
+    if isinstance(body, dict):
+        body = ExtractionRequest.model_validate(body)
+
+    text = body.text
+    template = body.template
+    custom_prompt = body.custom_prompt
 
     if not text.strip():
         return {"extracted_data": {}}
 
-    active_api_base = body.get("api_base") or _config["api_base"]
+    active_api_base = body.api_base or _config["api_base"]
     if is_ssrf_target(active_api_base):
-        return JSONResponse(
-            status_code=403,
-            content={
-                "error": (
-                    "Invalid api_base: SSRF protection. If you are pointing to a local or private "
-                    "model server, please set the environment variable ALLOW_SSRF_LOCAL=true "
-                    "to allow local network connections."
-                )
-            }
-        )
-    active_api_key = body.get("api_key") or _config["api_key"]
-    active_model = body.get("model") or _config["model"]
+        return JSONResponse(status_code=403, content={"error": SAFE_API_BASE_ERROR})
+    active_api_key = body.api_key or _config["api_key"]
+    active_model = body.model or _config["model"]
 
     if template == "invoice":
         instructions = (
@@ -502,6 +517,7 @@ async def extract_data(body: dict):
         import litellm
 
         from pdf_ocr.utils.litellm_provider import resolve_custom_provider
+
         custom_provider = resolve_custom_provider(active_model)
 
         response = await litellm.acompletion(
@@ -510,9 +526,7 @@ async def extract_data(body: dict):
             api_base=active_api_base,
             api_key=active_api_key,
             temperature=0.1,
-            messages=[
-                {"role": "user", "content": prompt}
-            ]
+            messages=[{"role": "user", "content": prompt}],
         )
 
         content = (response.choices[0].message.content or "").strip()
@@ -534,16 +548,13 @@ async def extract_data(body: dict):
                     pass
 
         return {"extracted_data": parsed}
-    except Exception as e:
-        return JSONResponse(
-            status_code=500,
-            content={
-                "error": f"Extraction failed: {str(e)}",
-                "raw_content": content if 'content' in locals() else ""
-            }
-        )
+    except Exception:
+        logger.exception("Extraction request failed")
+        return _stable_server_error()
+
 
 # ---- Async Celery Tasks ----------------------------------------------------
+
 
 @router.post("/api/translate/async")
 async def translate_text_async(body: dict):
@@ -567,6 +578,7 @@ async def get_translation_status(job_id: str):
     Poll the status of a Celery background translation job.
     """
     from pdf_ocr.api.celery_app import celery_app
+
     task = celery_app.AsyncResult(job_id)
 
     response = {
@@ -582,9 +594,7 @@ async def get_translation_status(job_id: str):
             response["result"] = task.get()
     else:
         # something went wrong in the background job
-        response["error"] = str(task.info)
+        logger.error("Async translation task failed: %s", task.info)
+        response["error"] = SERVER_ERROR_MESSAGE
 
     return response
-
-
-

@@ -7,6 +7,9 @@ const state = {
     settings: {},
     selectedFile: null,
     currentJobId: null,
+    currentJobToken: null,
+    progressChannelId: null,
+    progressSessionToken: null,
     processingStartTime: null,
     elapsedInterval: null,
     resultBlob: null,
@@ -260,7 +263,10 @@ async function fetchModels(selectedModel = null) {
             if(refs.connectionStatusDot) refs.connectionStatusDot.className = 'status-dot online';
             
             if(refs.modelSelect) {
-                refs.modelSelect.innerHTML = '<option value="">Select a model...</option>';
+                const placeholder = document.createElement('option');
+                placeholder.value = '';
+                placeholder.textContent = 'Select a model...';
+                refs.modelSelect.replaceChildren(placeholder);
                 data.models.forEach(modelId => {
                     const opt = document.createElement('option');
                     opt.value = modelId;
