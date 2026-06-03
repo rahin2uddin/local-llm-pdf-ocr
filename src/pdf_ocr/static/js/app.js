@@ -217,12 +217,10 @@ async function triggerDocuVerseOCR(file) {
         }
 
         const textArtifactId = response.headers.get('X-Text-Artifact-Id');
-        const textArtifactToken = response.headers.get('X-Text-Artifact-Token');
-        if (!textArtifactId || !textArtifactToken) {
+        if (!textArtifactId) {
             throw new Error('OCR completed but text artifact metadata was missing');
         }
         state.currentJobId = textArtifactId;
-        state.currentJobToken = textArtifactToken;
 
         const blob = await response.blob();
         state.resultBlob = blob;
@@ -249,10 +247,8 @@ async function triggerDocuVerseOCR(file) {
 
 async function fetchExtractedText() {
     try {
-        if (!state.currentJobId || !state.currentJobToken) throw new Error("Text artifact metadata is not available");
-        const textResp = await fetch(`/text/${encodeURIComponent(state.currentJobId)}?t=${Date.now()}`, {
-            headers: { Authorization: `Bearer ${state.currentJobToken}` }
-        });
+        if (!state.currentJobId) throw new Error("Text artifact ID is not available");
+        const textResp = await fetch(`/text/${encodeURIComponent(state.currentJobId)}?t=${Date.now()}`);
         if (!textResp.ok) throw new Error("Could not fetch extracted text JSON");
         
         const textMap = await textResp.json();
