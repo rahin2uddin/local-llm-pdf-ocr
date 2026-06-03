@@ -1,21 +1,21 @@
+from __future__ import annotations
+
+import logging
 import os
-from typing import TypedDict
+from typing import Any, TypedDict
 
-from langgraph.graph import END, START, StateGraph
+from pdf_ocr.core.translation_config import (
+    AsyncTranslationUnavailable,
+    TranslationSettings,
+)
 
-from pdf_ocr.api.routers.config import _config
+logger = logging.getLogger(__name__)
 
-try:
-    import chromadb
-    from chromadb.utils import embedding_functions
-    HAS_CHROMA = True
-except ImportError:
-    HAS_CHROMA = False
 
 # ---------------------------------------------------------------------------
 # State Schema
 # ---------------------------------------------------------------------------
-class TranslationState(TypedDict):
+class TranslationState(TypedDict, total=False):
     source_chunk: str
     target_language: str
     rag_context: list[str]
@@ -23,16 +23,38 @@ class TranslationState(TypedDict):
     evaluation_score: float
     feedback: str
     attempts: int
+    settings: TranslationSettings
+
 
 # ---------------------------------------------------------------------------
 # Graph Nodes
 # ---------------------------------------------------------------------------
-db_client = None
-emb_fn = None
+db_client: Any | None = None
+emb_fn: Any | None = None
+_translation_app: Any | None = None
 
-def get_chroma_collection():
-    if not HAS_CHROMA:
+
+def _optional_dependency_message(package: str) -> str:
+    return (
+        f"Async translation requires optional dependency '{package}'. "
+        "Install the async translation extras to enable this feature."
+    )
+
+
+def _get_chroma_modules() -> tuple[Any, Any] | None:
+    try:
+        import chromadb
+        from chromadb.utils import embedding_functions
+    except ImportError:
         return None
+    return chromadb, embedding_functions
+
+
+def get_chroma_collection() -> Any | None:
+    modules = _get_chroma_modules()
+    if modules is None:
+        return None
+    chromadb, embedding_functions = modules
 
     db_path = os.path.join(os.path.dirname(__file__), "..", "..", "..", "chroma_db")
     if not os.path.exists(db_path):
@@ -46,41 +68,51 @@ def get_chroma_collection():
             emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
                 model_name="paraphrase-multilingual-MiniLM-L12-v2"
             )
-        return db_client.get_collection(name="lanes_lexicon", embedding_function=emb_fn)  # type: ignore[arg-type]
-    except Exception:
+        return db_client.get_collection(name="lanes_lexicon", embedding_function=emb_fn)
+    except Exception as exc:
+        logger.warning("Unable to load translation lexicon from ChromaDB: %s", exc)
         return None
 
-def retrieve_lexicon_context(state: TranslationState):
+
+def retrieve_lexicon_context(state: TranslationState) -> dict[str, list[str]]:
     """Retrieves terminology from ChromaDB."""
     collection = get_chroma_collection()
-    context = []
+    context: list[str] = []
 
     if collection:
         try:
-            results = collection.query(
-                query_texts=[state["source_chunk"]],
-                n_results=3
-            )
+            results = collection.query(query_texts=[state["source_chunk"]], n_results=3)
             if results and results.get("documents") and results["documents"][0]:
                 context = results["documents"][0]
-        except Exception:
-            pass
+        except Exception as exc:
+            logger.warning("Unable to retrieve translation lexicon context: %s", exc)
 
     return {"rag_context": context}
 
-def translate_node(state: TranslationState):
+
+def _state_settings(state: TranslationState) -> TranslationSettings:
+    settings = state.get("settings")
+    if settings is None:
+        return TranslationSettings.from_env()
+    if not isinstance(settings, TranslationSettings):
+        raise ValueError("translation state settings must be TranslationSettings")
+    return settings
+
+
+def translate_node(state: TranslationState) -> dict[str, str | int]:
     """Calls the LLM to translate the chunk, using RAG context."""
     import litellm
-    active_api_base = _config.get("api_base", "http://localhost:1234/v1")
-    active_api_key = _config.get("api_key", "lm-studio")
-    active_model = _config.get("model", "gemma-4-e4b-it-obliterated")
 
     from pdf_ocr.utils.litellm_provider import resolve_custom_provider
-    custom_provider = resolve_custom_provider(active_model)
+
+    settings = _state_settings(state)
+    custom_provider = resolve_custom_provider(settings.model)
 
     prompt = f"Translate the following text into {state['target_language']}.\n\n"
     if state.get("rag_context"):
-        prompt += "Use the following lexicon definitions to ensure correct terminology:\n"
+        prompt += (
+            "Use the following lexicon definitions to ensure correct terminology:\n"
+        )
         prompt += "\n".join(state["rag_context"]) + "\n\n"
 
     if state.get("feedback"):
@@ -90,12 +122,12 @@ def translate_node(state: TranslationState):
 
     try:
         response = litellm.completion(
-            model=active_model,
+            model=settings.model,
             custom_llm_provider=custom_provider,
-            api_base=active_api_base,
-            api_key=active_api_key,
+            api_base=settings.api_base,
+            api_key=settings.api_key,
             temperature=0.3,
-            messages=[{"role": "user", "content": prompt}]
+            messages=[{"role": "user", "content": prompt}],
         )
         translated = response.choices[0].message.content or ""
     except Exception as e:
@@ -103,7 +135,8 @@ def translate_node(state: TranslationState):
 
     return {"translated_chunk": translated, "attempts": state.get("attempts", 0) + 1}
 
-def evaluate_node(state: TranslationState):
+
+def evaluate_node(state: TranslationState) -> dict[str, float | str]:
     """Evaluates the translation quality."""
     # Simplified mock evaluator.
     # In a full production system, this would be another LLM call checking if glossary terms were used.
@@ -126,40 +159,69 @@ def evaluate_node(state: TranslationState):
         return {"evaluation_score": 1.0, "feedback": "Looks good"}
 
     if len(translated) < len(source) * 0.1:
-        return {"evaluation_score": 0.0, "feedback": "Translation too short. Ensure you translate the entire chunk."}
+        return {
+            "evaluation_score": 0.0,
+            "feedback": "Translation too short. Ensure you translate the entire chunk.",
+        }
 
     return {"evaluation_score": 1.0, "feedback": "Looks good"}
 
-def should_refine(state: TranslationState):
+
+def should_refine(state: TranslationState) -> str:
     """Router logic for conditional edge."""
     if state.get("evaluation_score", 1.0) < 0.8:
         return "translate"
     return "end"
 
+
 # ---------------------------------------------------------------------------
 # Build the Graph
 # ---------------------------------------------------------------------------
-workflow = StateGraph(TranslationState)
-workflow.add_node("retrieve", retrieve_lexicon_context)
-workflow.add_node("translate", translate_node)
-workflow.add_node("evaluate", evaluate_node)
 
-workflow.add_edge(START, "retrieve")
-workflow.add_edge("retrieve", "translate")
-workflow.add_edge("translate", "evaluate")
-workflow.add_conditional_edges(
-    "evaluate",
-    should_refine,
-    {
-        "translate": "translate",
-        "end": END
-    }
-)
 
-translation_app = workflow.compile()
+def get_translation_app() -> Any:
+    """Return the compiled LangGraph app, building it only when invoked."""
+    global _translation_app
+    if _translation_app is not None:
+        return _translation_app
+
+    try:
+        from langgraph.graph import END, START, StateGraph
+    except ImportError as exc:
+        raise AsyncTranslationUnavailable(
+            _optional_dependency_message("langgraph")
+        ) from exc
+
+    workflow = StateGraph(TranslationState)
+    workflow.add_node("retrieve", retrieve_lexicon_context)
+    workflow.add_node("translate", translate_node)
+    workflow.add_node("evaluate", evaluate_node)
+
+    workflow.add_edge(START, "retrieve")
+    workflow.add_edge("retrieve", "translate")
+    workflow.add_edge("translate", "evaluate")
+    workflow.add_conditional_edges(
+        "evaluate", should_refine, {"translate": "translate", "end": END}
+    )
+
+    _translation_app = workflow.compile()
+    return _translation_app
+
+
+class _LazyTranslationApp:
+    def invoke(self, *args: Any, **kwargs: Any) -> Any:
+        return get_translation_app().invoke(*args, **kwargs)
+
+
+translation_app = _LazyTranslationApp()
+
 
 def chunk_text(text: str, max_chunk_size: int = 4000) -> list[str]:
     """Splits text into chunks of maximum size, trying to preserve paragraph and sentence boundaries."""
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    if max_chunk_size < 1:
+        raise ValueError("max_chunk_size must be greater than zero")
     if not text:
         return []
     if len(text) <= max_chunk_size:
@@ -213,25 +275,36 @@ def chunk_text(text: str, max_chunk_size: int = 4000) -> list[str]:
     return [c for c in chunks if c.strip()]
 
 
-def run_translation(text: str, target_language: str = "English") -> str:
+def run_translation(
+    text: str,
+    target_language: str = "English",
+    settings: TranslationSettings | None = None,
+) -> str:
     """Convenience function to run the compiled graph on a text by chunking it to prevent LLM context overflow."""
+    if not isinstance(text, str):
+        raise TypeError("text must be a string")
+    if not isinstance(target_language, str) or not target_language.strip():
+        raise ValueError("target_language must be a non-empty string")
     if not text.strip():
         return ""
 
+    active_settings = settings or TranslationSettings.from_env()
     chunks = chunk_text(text)
-    translated_chunks = []
+    translated_chunks: list[str] = []
+    app = get_translation_app()
 
     for chunk in chunks:
-        initial_state = {
+        initial_state: TranslationState = {
             "source_chunk": chunk,
             "target_language": target_language,
             "rag_context": [],
             "translated_chunk": "",
             "evaluation_score": 1.0,
             "feedback": "",
-            "attempts": 0
+            "attempts": 0,
+            "settings": active_settings,
         }
-        result = translation_app.invoke(initial_state)  # type: ignore[call-overload]
+        result = app.invoke(initial_state)
         translated = result.get("translated_chunk", "")
         if translated:
             translated_chunks.append(translated)

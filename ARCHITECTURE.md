@@ -20,26 +20,24 @@ PDF/image -> grounded bbox-native VLM OCR -> optional post-process -> searchable
 
 | Path | Single Responsibility |
 | --- | --- |
+| `src/pdf_ocr/__init__.py` | Lazy package-level public exports that avoid loading OCR or web dependencies during unrelated submodule imports |
 | `src/pdf_ocr/cli.py` | CLI arguments, runtime wiring, and Rich progress output |
-| `src/pdf_ocr/server.py` | FastAPI application setup and server entry point |
+| `src/pdf_ocr/server.py` | Lazy optional-web dependency loading, FastAPI application setup, and server entry point |
 | `src/pdf_ocr/pipeline.py` | Shared hybrid and grounded OCR orchestration |
 | `src/pdf_ocr/core/aligner.py` | Surya detection and DP text-to-box alignment |
 | `src/pdf_ocr/core/ocr.py` | OpenAI-compatible VLM calls, prompts, limits, and OCR response filters |
 | `src/pdf_ocr/core/pdf.py` | PDF/image conversion and searchable PDF embedding |
 | `src/pdf_ocr/core/grounded.py` | Grounded OCR backends and bbox-native response parsing |
 | `src/pdf_ocr/core/postprocess.py` | Dictionary-based spellcheck post-processing |
+| `src/pdf_ocr/core/translation_config.py` | Core-owned typed settings and optional-feature errors for async translation |
 | `src/pdf_ocr/core/translation.py` | Optional LangGraph translation workflow |
-| `src/pdf_ocr/api/routers/ocr.py` | OCR document processing, token-bound text retrieval, and recent OCR job history routes |
-| `src/pdf_ocr/api/routers/ai.py` | Translation, structured extraction, and asynchronous translation HTTP routes |
+| `src/pdf_ocr/resources/dictionaries/` | Packaged compiled spellcheck dictionaries loaded before legacy repository-root dictionaries |
+| `src/pdf_ocr/api/routers/ocr.py` | OCR, translation, extraction, and asynchronous job routes |
 | `src/pdf_ocr/api/routers/config.py` | Runtime configuration and model discovery |
 | `src/pdf_ocr/api/routers/websocket.py` | Token-bound WebSocket progress transport and progress session issuance |
 | `src/pdf_ocr/api/schemas/` | Typed FastAPI boundary schemas for runtime configuration, OCR form settings, translation, and extraction requests |
-| `src/pdf_ocr/api/services/ai.py` | AI translation and structured extraction settings resolution, prompts, LiteLLM calls, JSON parsing, and domain errors |
-| `src/pdf_ocr/api/services/artifacts.py` | Token-bound extracted-text artifact persistence, expiry, bounded retention, and cleanup |
-| `src/pdf_ocr/api/services/jobs.py` | Capped in-memory OCR job history records |
-| `src/pdf_ocr/api/services/progress.py` | Progress stage percentage mapping and opaque channel/session token validation |
-| `src/pdf_ocr/api/services/security.py` | API upload validation, stable error constants, and temporary-file cleanup |
-| `src/pdf_ocr/api/tasks.py` | Celery OCR task execution |
+| `src/pdf_ocr/api/services/security.py` | API upload validation, stable error constants, temporary-file cleanup, and opaque text artifact IDs |
+| `src/pdf_ocr/api/tasks.py` | Optional Celery translation task execution |
 | `src/pdf_ocr/utils/image.py` | Image crop, blank-region detection, and crop encoding helpers |
 | `src/pdf_ocr/utils/security.py` | SSRF target validation |
 | `src/pdf_ocr/utils/litellm_provider.py` | LiteLLM provider selection |
@@ -86,33 +84,34 @@ form until embedding.
 | `tests/test_api_safety.py` | Cover config validation, SSRF fail-closed behavior, streaming upload validation, opaque text artifacts, stable API errors, and static JS sink removal |
 | `tests/test_security_qa.py` | Keep extraction JSON parsing deterministic under fail-closed SSRF validation |
 
-### 2026-06-03: Stage 2 API service boundaries and artifact safety
+### 2026-06-03: Optional async translation boundary
 
 | File | Responsibility |
 | --- | --- |
-| `src/pdf_ocr/api/services/artifacts.py` | Store extracted-text JSON artifacts behind server-issued IDs and bearer-style tokens with TTL expiry, max-entry eviction, and backing-file cleanup |
-| `src/pdf_ocr/api/services/jobs.py` | Record bounded OCR job metadata with deterministic validation and newest-first listing |
-| `src/pdf_ocr/api/services/progress.py` | Map pipeline stages to UI percentages and validate opaque progress channel/session bindings |
-| `src/pdf_ocr/api/routers/ocr.py` | Delegate artifact, job, and progress concerns to services while preserving OCR, translation, extraction, and async task endpoints |
-| `src/pdf_ocr/api/routers/websocket.py` | Issue progress sessions and accept only token-bound websocket progress channels |
-| `src/pdf_ocr/api/services/security.py` | Keep upload validation and temp-file cleanup separate from artifact authorization |
-| `src/pdf_ocr/static/js/app.js` | Request token-bound progress sessions and retrieve extracted text with artifact bearer tokens |
-| `src/pdf_ocr/static/js/state_and_api.js` | Track current artifact and progress-session metadata in browser state |
-| `tests/test_artifact_store.py` | Cover artifact token binding, expiry cleanup, max-entry eviction, invalid IDs, idempotent deletion, and JSON writes |
-| `tests/test_jobs_progress_services.py` | Cover job history capping/validation and progress stage/channel validation |
-| `tests/test_api_safety.py` | Cover router-level artifact token enforcement, artifact expiry, progress-session binding, and Stage 1 API safety regressions |
-| `ARCHITECTURE.md` | Record Stage 2 service boundaries and single responsibilities |
+| `src/pdf_ocr/core/translation_config.py` | Own typed translation settings and the deterministic optional-feature error used by core and API boundaries |
+| `src/pdf_ocr/core/translation.py` | Keep chunking and evaluation helpers importable without async extras, lazily build the LangGraph workflow, and accept injected translation settings |
+| `src/pdf_ocr/api/routers/config.py` | Adapt the mutable web runtime config into core-owned translation settings without exposing `_config` to core modules |
+| `src/pdf_ocr/api/celery_app.py` | Guard Celery imports and provide an import-safe fallback task facade when async extras are not installed |
+| `src/pdf_ocr/api/tasks.py` | Validate async translation task inputs and pass explicit translation settings into the core workflow |
+| `src/pdf_ocr/api/routers/ocr.py` | Validate async translation route inputs and return deterministic 503 responses when optional async extras are unavailable |
+| `pyproject.toml` | Move Celery, Redis, LangGraph, ChromaDB, and sentence-transformers into the `async-translation` extra with `translation` as an alias extra |
+| `tests/test_translation_boundary.py` | Cover guarded imports without async extras and explicit translation settings injection |
 
-### 2026-06-03: Stage 3 AI API router and service split
+### 2026-06-03: Spellcheck resource package cleanup
 
 | File | Responsibility |
 | --- | --- |
-| `src/pdf_ocr/api/services/ai.py` | Resolve AI request settings against runtime config, block unsafe API bases, build translation and extraction prompts, call LiteLLM, parse extraction JSON, and raise stable domain errors |
-| `src/pdf_ocr/api/routers/ai.py` | Expose translation, extraction, asynchronous translation dispatch, and translation status endpoints as a thin HTTP layer over AI services and Celery |
-| `src/pdf_ocr/api/routers/ocr.py` | Remain focused on OCR processing, extracted-text artifact retrieval, and OCR job history |
-| `src/pdf_ocr/server.py` | Register the AI router alongside config, OCR, and websocket routers |
-| `tests/test_ai_services.py` | Cover AI settings resolution, prompt construction, SSRF blocking, provider error wrapping, and deterministic extraction JSON parsing |
-| `tests/test_ai_router.py` | Cover AI route stable errors, SSRF blocking, invalid extraction JSON behavior, and translation status response shape |
-| `tests/test_api_safety.py` | Include the AI router in safety-route test apps after the endpoint split |
-| `tests/test_security_qa.py` | Exercise robust extraction JSON behavior through the AI service boundary |
-| `ARCHITECTURE.md` | Record Stage 3 API service and router responsibilities |
+| `src/pdf_ocr/resources/dictionaries/ara.json.gz` | Packaged Arabic compiled spellcheck dictionary for installed distributions |
+| `src/pdf_ocr/resources/dictionaries/eng.json.gz` | Packaged English compiled spellcheck dictionary for installed distributions |
+| `src/pdf_ocr/core/postprocess.py` | Load packaged dictionaries first while retaining legacy repository-root and user-cache fallbacks |
+| `pyproject.toml` | Exclude bytecode cache artifacts from Hatch package builds |
+| `tests/test_dictionary_postprocess.py` | Cover packaged dictionary lookup and legacy repository-root fallback |
+
+### 2026-06-03: Lazy web server imports
+
+| File | Responsibility |
+| --- | --- |
+| `src/pdf_ocr/__init__.py` | Preserve package-level OCR exports through lazy lookups so `import pdf_ocr.server` does not load OCR core dependencies first |
+| `src/pdf_ocr/server.py` | Preserve `pdf_ocr.server:app` and `pdf_ocr.server:main` while deferring FastAPI, router, static-file, and uvicorn imports until the web app is created or run |
+| `tests/test_server_lazy_imports.py` | Verify base-install-safe `pdf_ocr.server` imports and deterministic missing-web-extra errors without uninstalling FastAPI |
+| `ARCHITECTURE.md` | Record the optional-web lazy import boundary for the server module |

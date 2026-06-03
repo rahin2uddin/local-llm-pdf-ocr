@@ -6,6 +6,12 @@ from fastapi.responses import JSONResponse
 
 from pdf_ocr.api.schemas import ConfigUpdate
 from pdf_ocr.api.services.security import SAFE_API_BASE_ERROR, SERVER_ERROR_MESSAGE
+from pdf_ocr.core.translation_config import (
+    DEFAULT_TRANSLATION_API_BASE,
+    DEFAULT_TRANSLATION_API_KEY,
+    DEFAULT_TRANSLATION_MODEL,
+    TranslationSettings,
+)
 from pdf_ocr.utils.security import is_ssrf_target
 
 router = APIRouter()
@@ -34,9 +40,9 @@ def _env_bool(name: str, default: bool) -> bool:
 # In-memory configuration store – initialised from environment variables
 # ---------------------------------------------------------------------------
 _config: dict = {
-    "api_base": os.getenv("LLM_API_BASE", "http://localhost:1234/v1"),
-    "api_key": os.getenv("LLM_API_KEY", "lm-studio"),
-    "model": os.getenv("LLM_MODEL", "allenai/olmocr-2-7b"),
+    "api_base": os.getenv("LLM_API_BASE", DEFAULT_TRANSLATION_API_BASE),
+    "api_key": os.getenv("LLM_API_KEY", DEFAULT_TRANSLATION_API_KEY),
+    "model": os.getenv("LLM_MODEL", DEFAULT_TRANSLATION_MODEL),
     "concurrency": _env_int("OCR_CONCURRENCY", 3),
     "dpi": _env_int("OCR_DPI", 200),
     "dense_mode": os.getenv("OCR_DENSE_MODE", "auto"),
@@ -51,6 +57,11 @@ _config: dict = {
     "spellcheck": os.getenv("OCR_SPELLCHECK", "none"),
     "cross_page": _env_bool("OCR_CROSS_PAGE", False),
 }
+
+
+def get_translation_settings() -> TranslationSettings:
+    """Return core-owned settings for the optional async translation workflow."""
+    return TranslationSettings.from_mapping(_config)
 
 
 # ---- Configuration --------------------------------------------------------

@@ -72,6 +72,17 @@ Install the web dependencies when you need the server:
 uv sync --extra web
 ```
 
+The base install includes the CLI and shared OCR pipeline. The web server is an
+optional boundary: `local-llm-pdf-ocr-server` is always installed, but it only
+loads FastAPI and Uvicorn when the server is started.
+
+Install the asynchronous translation dependencies only when you need the
+Redis/Celery/LangGraph background translation API:
+
+```bash
+uv sync --extra web --extra async-translation
+```
+
 ### Windows
 
 Double-click `install.bat`. It runs `install.ps1`, installs `uv` when needed, syncs the web environment, checks for Docker, and creates Desktop and Start Menu shortcuts.
@@ -180,11 +191,11 @@ The workspace exposes additional OCR enhancement settings:
 | Spellcheck | Runs conservative dictionary-based post-processing for the selected language. |
 | Cross-page merge | Merges a non-terminated final line into the next page's first line. |
 
-Translation and structured extraction in the browser use synchronous LiteLLM-backed endpoints and do not require Redis. The optional asynchronous translation API uses Celery, Redis, and the LangGraph workflow:
+Translation and structured extraction in the browser use synchronous LiteLLM-backed endpoints and do not require Redis. The optional asynchronous translation API uses Celery, Redis, and the LangGraph workflow, so install both optional extras before running the worker:
 
 ```bash
 docker run -d --name redis-local-ocr -p 6379:6379 redis
-uv run --extra web celery -A pdf_ocr.api.celery_app worker --loglevel=info -P solo
+uv run --extra web --extra async-translation celery -A pdf_ocr.api.celery_app worker --loglevel=info -P solo
 ```
 
 ## HTTP API
@@ -223,7 +234,9 @@ src/pdf_ocr/
     ocr.py                LiteLLM OCR client and stability filters
     pdf.py                PDF/image conversion and text embedding
     postprocess.py        Dictionary spellcheck
+    translation_config.py Typed async translation settings
     translation.py        LangGraph translation workflow
+  resources/dictionaries/ Packaged spellcheck dictionaries
   static/                 Browser workspace assets
   utils/
     image.py              Crop and blank-region helpers
@@ -232,7 +245,7 @@ src/pdf_ocr/
 tests/                    Fast tests and slow Surya integration tests
 scripts/                  Evaluation, fixture, and debugging utilities
 examples/                 Example inputs and generated outputs
-resources/                Spellcheck dictionaries and Tesseract wordlists
+resources/                Legacy spellcheck dictionary fallback and Tesseract wordlists
 ```
 
 ## Testing

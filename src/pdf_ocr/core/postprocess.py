@@ -8,6 +8,7 @@ Supports pre-downloaded Tesseract langdata wordlists from 'resources/langdata',
 supporting over 100+ languages offline with Unicode-aware diacritic handling and
 Levenshtein distance 1 edit space for exceptional performance.
 """
+
 import asyncio
 import gzip
 import json
@@ -15,6 +16,7 @@ import logging
 import os
 import re
 import unicodedata
+from importlib import resources, util
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -30,6 +32,7 @@ _compile_lock = asyncio.Lock()
 def _load_custom_dictionary(dict_path: str) -> "SpellChecker":
     """Synchronous SpellChecker init from a custom dictionary file — call via asyncio.to_thread."""
     from spellchecker import SpellChecker
+
     spell = SpellChecker(language=None, distance=1)
     spell.word_frequency.load_dictionary(dict_path)
     return spell
@@ -38,29 +41,68 @@ def _load_custom_dictionary(dict_path: str) -> "SpellChecker":
 def _load_builtin_dictionary(base_lang: str) -> "SpellChecker":
     """Synchronous SpellChecker init from a built-in language dictionary — call via asyncio.to_thread."""
     from spellchecker import SpellChecker
+
     return SpellChecker(language=base_lang, distance=1)
 
 
 # Mapping from standard language codes to Tesseract 3-letter folder names
 _ISO_639_MAP = {
-    "en": "eng", "eng": "eng", "english": "eng",
-    "ar": "ara", "ara": "ara", "arabic": "ara",
-    "de": "deu", "deu": "deu", "german": "deu",
-    "es": "spa", "spa": "spa", "spanish": "spa",
-    "fr": "fra", "fra": "fra", "french": "fra",
-    "pt": "por", "por": "por", "portuguese": "por",
-    "ru": "rus", "rus": "rus", "russian": "rus",
-    "it": "ita", "ita": "ita", "italian": "ita",
-    "nl": "nld", "nld": "nld", "dutch": "nld",
-    "sv": "swe", "swe": "swe", "swedish": "swe",
-    "pl": "pol", "pol": "pol", "polish": "pol",
-    "tr": "tur", "tur": "tur", "turkish": "tur",
-    "zh": "chi_sim", "ja": "jpn", "ko": "kor", "vi": "vie",
-    "hi": "hin", "fa": "fas", "el": "ell", "he": "heb",
-    "uk": "ukr", "cs": "ces", "da": "dan", "fi": "fin",
-    "hu": "hun", "id": "ind", "no": "nor", "ro": "ron",
-    "sk": "slk", "th": "tha"
+    "en": "eng",
+    "eng": "eng",
+    "english": "eng",
+    "ar": "ara",
+    "ara": "ara",
+    "arabic": "ara",
+    "de": "deu",
+    "deu": "deu",
+    "german": "deu",
+    "es": "spa",
+    "spa": "spa",
+    "spanish": "spa",
+    "fr": "fra",
+    "fra": "fra",
+    "french": "fra",
+    "pt": "por",
+    "por": "por",
+    "portuguese": "por",
+    "ru": "rus",
+    "rus": "rus",
+    "russian": "rus",
+    "it": "ita",
+    "ita": "ita",
+    "italian": "ita",
+    "nl": "nld",
+    "nld": "nld",
+    "dutch": "nld",
+    "sv": "swe",
+    "swe": "swe",
+    "swedish": "swe",
+    "pl": "pol",
+    "pol": "pol",
+    "polish": "pol",
+    "tr": "tur",
+    "tur": "tur",
+    "turkish": "tur",
+    "zh": "chi_sim",
+    "ja": "jpn",
+    "ko": "kor",
+    "vi": "vie",
+    "hi": "hin",
+    "fa": "fas",
+    "el": "ell",
+    "he": "heb",
+    "uk": "ukr",
+    "cs": "ces",
+    "da": "dan",
+    "fi": "fin",
+    "hu": "hun",
+    "id": "ind",
+    "no": "nor",
+    "ro": "ron",
+    "sk": "slk",
+    "th": "tha",
 }
+
 
 class DictionaryPostProcessor:
     def __init__(self, lang: str, resources_dir: str | None = None):
@@ -69,7 +111,7 @@ class DictionaryPostProcessor:
         self._custom_resources_dir = resources_dir
 
         # Resolve clean language code
-        clean_lang = self.lang.split('-')[0].lower().strip()
+        clean_lang = self.lang.split("-")[0].lower().strip()
         self.tess_lang = _ISO_639_MAP.get(clean_lang, clean_lang)
 
     async def ensure_loaded(self):
@@ -80,9 +122,7 @@ class DictionaryPostProcessor:
         await self._init_spellchecker()
 
     async def _init_spellchecker(self):
-        try:
-            from spellchecker import SpellChecker
-        except ImportError:
+        if util.find_spec("spellchecker") is None:
             logger.warning("pyspellchecker is not installed. Skipping spellcheck.")
             self.spell = None
             return
@@ -92,6 +132,7 @@ class DictionaryPostProcessor:
             resources_dir = self._custom_resources_dir
             langdata_dir = os.path.join(resources_dir, "langdata")
             dictionaries_dir = os.path.join(resources_dir, "dictionaries")
+            packaged_dict = None
         else:
             current_dir = os.path.dirname(os.path.abspath(__file__))
             project_root = os.path.abspath(os.path.join(current_dir, "..", "..", ".."))
@@ -100,17 +141,41 @@ class DictionaryPostProcessor:
             dictionaries_dir = os.path.join(resources_dir, "dictionaries")
 
         # Fallback cache directories (if project root is read-only)
-        fallback_resources_dir = os.path.join(os.path.expanduser("~"), ".local-llm-pdf-ocr")
+        fallback_resources_dir = os.path.join(
+            os.path.expanduser("~"), ".local-llm-pdf-ocr"
+        )
         fallback_dictionaries_dir = os.path.join(fallback_resources_dir, "dictionaries")
 
         # Determine target dictionary file paths
         dict_filename = f"{self.tess_lang}.json.gz"
+        if self._custom_resources_dir:
+            packaged_dict = None
+        else:
+            packaged_dict = resources.files("pdf_ocr").joinpath(
+                "resources", "dictionaries", dict_filename
+            )
         primary_dict_path = os.path.join(dictionaries_dir, dict_filename)
         fallback_dict_path = os.path.join(fallback_dictionaries_dir, dict_filename)
 
         async with _compile_lock:
+            if packaged_dict is not None and packaged_dict.is_file():
+                try:
+                    with resources.as_file(packaged_dict) as packaged_dict_path:
+                        self.spell = await asyncio.to_thread(
+                            _load_custom_dictionary,
+                            str(packaged_dict_path),
+                        )
+                    logger.info(
+                        f"Successfully loaded packaged Tesseract dictionary for '{self.tess_lang}' (Distance: 1)."
+                    )
+                    return
+                except Exception as e:
+                    logger.warning(
+                        f"Failed to load packaged dictionary for '{self.tess_lang}': {e}"
+                    )
+
             # Check if compiled dictionary already exists
-            dict_path = None
+            dict_path: str | None = None
             if os.path.exists(primary_dict_path):
                 dict_path = primary_dict_path
             elif os.path.exists(fallback_dict_path):
@@ -118,7 +183,9 @@ class DictionaryPostProcessor:
             else:
                 # Compile dictionary from raw Tesseract wordlist if available
                 wordlist_filename = f"{self.tess_lang}.wordlist"
-                raw_wordlist_path = os.path.join(langdata_dir, self.tess_lang, wordlist_filename)
+                raw_wordlist_path = os.path.join(
+                    langdata_dir, self.tess_lang, wordlist_filename
+                )
 
                 if os.path.exists(raw_wordlist_path):
                     # Try writing to primary dictionaries dir first, fallback if read-only
@@ -129,7 +196,9 @@ class DictionaryPostProcessor:
                         os.makedirs(fallback_dictionaries_dir, exist_ok=True)
                         target_dict_path = fallback_dict_path
 
-                    logger.info(f"Compiling raw Tesseract wordlist for '{self.tess_lang}' to {target_dict_path}...")
+                    logger.info(
+                        f"Compiling raw Tesseract wordlist for '{self.tess_lang}' to {target_dict_path}..."
+                    )
 
                     # Run compilation in a thread pool to avoid blocking asyncio
                     success = await asyncio.to_thread(
@@ -138,29 +207,39 @@ class DictionaryPostProcessor:
                     if success:
                         dict_path = target_dict_path
                 else:
-                    logger.debug(f"Raw Tesseract wordlist not found at: {raw_wordlist_path}")
+                    logger.debug(
+                        f"Raw Tesseract wordlist not found at: {raw_wordlist_path}"
+                    )
 
             # Initialize spellchecker (offloaded — SpellChecker constructor
             # and load_dictionary both read/unzip files from disk).
             if dict_path:
                 try:
                     self.spell = await asyncio.to_thread(
-                        _load_custom_dictionary, dict_path,
+                        _load_custom_dictionary,
+                        dict_path,
                     )
-                    logger.info(f"Successfully loaded custom Tesseract dictionary for '{self.tess_lang}' (Distance: 1).")
+                    logger.info(
+                        f"Successfully loaded custom Tesseract dictionary for '{self.tess_lang}' (Distance: 1)."
+                    )
                     return
                 except Exception as e:
                     logger.warning(f"Failed to load custom dictionary {dict_path}: {e}")
 
         # Fallback to pyspellchecker default dictionary (supports en, es, de, fr, pt, ru, ar)
-        base_lang = self.lang.split('-')[0].lower()
+        base_lang = self.lang.split("-")[0].lower()
         try:
             self.spell = await asyncio.to_thread(
-                _load_builtin_dictionary, base_lang,
+                _load_builtin_dictionary,
+                base_lang,
             )
-            logger.info(f"Loaded default pyspellchecker dictionary for '{base_lang}' (Distance: 1).")
+            logger.info(
+                f"Loaded default pyspellchecker dictionary for '{base_lang}' (Distance: 1)."
+            )
         except ValueError:
-            logger.warning(f"No spellcheck dictionary available for language '{self.lang}'. Spellcheck disabled.")
+            logger.warning(
+                f"No spellcheck dictionary available for language '{self.lang}'. Spellcheck disabled."
+            )
             self.spell = None
 
     def _compile_wordlist(self, wordlist_path: str, output_path: str) -> bool:
@@ -177,7 +256,9 @@ class DictionaryPostProcessor:
                         continue
 
                     # Clean Unicode marks (diacritics) to validate that it is purely alphabetical
-                    cleaned = "".join(c for c in word if unicodedata.category(c) != "Mn")
+                    cleaned = "".join(
+                        c for c in word if unicodedata.category(c) != "Mn"
+                    )
                     if cleaned.isalpha():
                         # We save the original word (with diacritics) lowercased with flat frequency of 1
                         words_dict[word.lower()] = 1
@@ -223,5 +304,4 @@ class DictionaryPostProcessor:
             return word
 
         # Match word boundaries supporting Arabic, Latin, and Cyrillic character classes
-        return re.sub(r'[^\W\d_]+', replace_word, text)
-
+        return re.sub(r"[^\W\d_]+", replace_word, text)

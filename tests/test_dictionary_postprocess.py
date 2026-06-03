@@ -7,9 +7,11 @@ import json
 import os
 import shutil
 import tempfile
+from pathlib import Path
 
 import pytest
 
+import pdf_ocr.core.postprocess as postprocess
 from pdf_ocr.core.postprocess import DictionaryPostProcessor
 
 
@@ -49,6 +51,7 @@ def test_unicode_diacritics_check():
 
     # Clean check logic test
     import unicodedata
+
     def is_valid(word):
         cleaned = "".join(c for c in word if unicodedata.category(c) != "Mn")
         return cleaned.isalpha()
@@ -96,6 +99,67 @@ async def test_compilation_and_loading(temp_resources):
     # Unknown or far typos (distance > 1) remain untouched
     assert processor.correct_text("apffffl") == "apffffl"
 
+
+async def test_packaged_dictionary_lookup_precedes_legacy_resources(monkeypatch):
+    """Default lookup should load bundled dictionaries from the installed package."""
+    loaded_paths: list[str] = []
+    sentinel = object()
+
+    def fake_load_custom_dictionary(dict_path: str):
+        loaded_paths.append(dict_path)
+        return sentinel
+
+    monkeypatch.setattr(
+        postprocess, "_load_custom_dictionary", fake_load_custom_dictionary
+    )
+
+    processor = DictionaryPostProcessor("eng")
+    await processor.ensure_loaded()
+
+    package_dict_path = (
+        Path(__file__).parents[1]
+        / "src"
+        / "pdf_ocr"
+        / "resources"
+        / "dictionaries"
+        / "eng.json.gz"
+    ).resolve()
+    assert processor.spell is sentinel
+    assert loaded_paths == [str(package_dict_path)]
+
+
+async def test_legacy_repository_dictionary_fallback(monkeypatch):
+    """Repository-root dictionaries remain a fallback for older checkouts."""
+
+    class MissingPackagedResource:
+        def joinpath(self, *parts: str) -> MissingPackagedResource:
+            return self
+
+        def is_file(self) -> bool:
+            return False
+
+    loaded_paths: list[str] = []
+    sentinel = object()
+
+    def fake_load_custom_dictionary(dict_path: str):
+        loaded_paths.append(dict_path)
+        return sentinel
+
+    monkeypatch.setattr(
+        postprocess.resources, "files", lambda package: MissingPackagedResource()
+    )
+    monkeypatch.setattr(
+        postprocess, "_load_custom_dictionary", fake_load_custom_dictionary
+    )
+
+    processor = DictionaryPostProcessor("eng")
+    await processor.ensure_loaded()
+
+    legacy_dict_path = (
+        Path(__file__).parents[1] / "resources" / "dictionaries" / "eng.json.gz"
+    ).resolve()
+    assert processor.spell is sentinel
+    assert loaded_paths == [str(legacy_dict_path)]
 
 
 async def test_graceful_fallback():

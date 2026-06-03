@@ -10,8 +10,6 @@ from unittest.mock import patch
 
 import pytest
 
-from pdf_ocr.api.schemas import ExtractionRequest
-from pdf_ocr.api.services.ai import extract_structured_data
 from pdf_ocr.api.tasks import process_translation_task
 from pdf_ocr.core.translation import chunk_text, evaluate_node
 from pdf_ocr.utils.security import is_ssrf_target
@@ -126,7 +124,10 @@ def test_celery_task_raises_value_error_on_translation_error():
 
 
 def test_extract_data_robust_json_parsing():
-    # Invalid model JSON should not crash extraction or leak provider details.
+    pytest.importorskip("fastapi")
+    from pdf_ocr.api.routers import ocr
+
+    # Verify our custom regex fallback in ocr.py doesn't crash when JSON matches are missing or fail
     async def mock_acompletion(*args, **kwargs):
         return SimpleNamespace(
             choices=[
@@ -136,16 +137,24 @@ def test_extract_data_robust_json_parsing():
             ]
         )
 
-    with patch("litellm.acompletion", mock_acompletion):
-        with patch("pdf_ocr.api.services.ai.is_ssrf_target", return_value=False):
+    with (
+        patch.object(ocr.json, "loads") as mock_loads,
+        patch.object(ocr.re, "search") as mock_search,
+        patch("litellm.acompletion", mock_acompletion),
+    ):
+        mock_loads.side_effect = json.JSONDecodeError("JSON Decode Error", "", 0)
+        mock_search.return_value = None  # No matching bracket/braces found
+
+        # We call the FastAPI handler synchronously via standard coroutine run
+        with patch("pdf_ocr.utils.security.socket.getaddrinfo") as mock_getaddrinfo:
+            mock_getaddrinfo.return_value = [
+                (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("104.18.3.161", 443))
+            ]
             response = asyncio.run(
-                extract_structured_data(
-                    ExtractionRequest(
-                        text="Hello World",
-                        template="invoice",
-                        api_base="http://api.openai.com/v1",
-                    ),
-                    config={
+                ocr.extract_data(
+                    {
+                        "text": "Hello World",
+                        "template": "invoice",
                         "api_base": "http://api.openai.com/v1",
                         "api_key": "test-key",
                         "model": "openai/test-model",
