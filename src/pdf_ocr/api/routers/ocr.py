@@ -30,6 +30,7 @@ from pdf_ocr.api.services.security import (
     cleanup_files,
     save_validated_upload,
 )
+from pdf_ocr.core.translation_config import AsyncTranslationUnavailable
 from pdf_ocr.utils import is_ssrf_target
 
 from .config import _config
@@ -561,11 +562,30 @@ async def translate_text_async(body: dict):
     """
     from pdf_ocr.api.tasks import process_translation_task
 
+    if not isinstance(body, dict):
+        return JSONResponse(
+            status_code=422,
+            content={"error": "Invalid request parameters."},
+        )
+
     document_id = body.get("document_id", str(uuid.uuid4()))
     text = body.get("text", "")
+    if not isinstance(document_id, str) or not document_id.strip():
+        return JSONResponse(
+            status_code=422,
+            content={"error": "document_id must be a non-empty string."},
+        )
+    if not isinstance(text, str):
+        return JSONResponse(
+            status_code=422,
+            content={"error": "text must be a string."},
+        )
 
     # Dispatch Celery task
-    task = process_translation_task.delay(document_id, text)
+    try:
+        task = process_translation_task.delay(document_id, text)
+    except AsyncTranslationUnavailable as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc)})
 
     return {"job_id": task.id, "status": "Processing"}
 
@@ -577,7 +597,10 @@ async def get_translation_status(job_id: str):
     """
     from pdf_ocr.api.celery_app import celery_app
 
-    task = celery_app.AsyncResult(job_id)
+    try:
+        task = celery_app.AsyncResult(job_id)
+    except AsyncTranslationUnavailable as exc:
+        return JSONResponse(status_code=503, content={"error": str(exc)})
 
     response = {
         "job_id": job_id,

@@ -181,8 +181,11 @@ cython_debug/
 .cursorindexingignore
 .claude/
 
-# Custom Resources
-/resources/
+# Custom resources. Root dictionaries are retained as a legacy runtime
+# fallback; installable dictionaries live under src/pdf_ocr/resources.
+/resources/*
+!/resources/dictionaries/
+!/resources/dictionaries/*.json.gz
 
 # Scratch / working directory
 /scratch/

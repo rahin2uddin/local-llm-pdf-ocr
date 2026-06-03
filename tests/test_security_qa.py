@@ -11,7 +11,6 @@ from unittest.mock import patch
 
 import pytest
 
-from pdf_ocr.api.routers.ocr import extract_data
 from pdf_ocr.api.tasks import process_translation_task
 from pdf_ocr.core.translation import chunk_text, evaluate_node
 from pdf_ocr.utils.security import is_ssrf_target
@@ -125,13 +124,11 @@ def test_celery_task_raises_value_error_on_translation_error():
             assert "Translation failed" in str(exc_info.value)
 
 
-@patch("pdf_ocr.api.routers.ocr.re.search")
-@patch("pdf_ocr.api.routers.ocr.json.loads")
-def test_extract_data_robust_json_parsing(mock_loads, mock_search):
-    # Verify our custom regex fallback in ocr.py doesn't crash when JSON matches are missing or fail
-    mock_loads.side_effect = json.JSONDecodeError("JSON Decode Error", "", 0)
-    mock_search.return_value = None  # No matching bracket/braces found
+def test_extract_data_robust_json_parsing():
+    pytest.importorskip("fastapi")
+    from pdf_ocr.api.routers import ocr
 
+    # Verify our custom regex fallback in ocr.py doesn't crash when JSON matches are missing or fail
     async def mock_acompletion(*args, **kwargs):
         return SimpleNamespace(
             choices=[
@@ -141,14 +138,21 @@ def test_extract_data_robust_json_parsing(mock_loads, mock_search):
             ]
         )
 
-    with patch("litellm.acompletion", mock_acompletion):
+    with (
+        patch.object(ocr.json, "loads") as mock_loads,
+        patch.object(ocr.re, "search") as mock_search,
+        patch("litellm.acompletion", mock_acompletion),
+    ):
+        mock_loads.side_effect = json.JSONDecodeError("JSON Decode Error", "", 0)
+        mock_search.return_value = None  # No matching bracket/braces found
+
         # We call the FastAPI handler synchronously via standard coroutine run
         with patch("pdf_ocr.utils.security.socket.getaddrinfo") as mock_getaddrinfo:
             mock_getaddrinfo.return_value = [
                 (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("104.18.3.161", 443))
             ]
             response = asyncio.run(
-                extract_data(
+                ocr.extract_data(
                     {
                         "text": "Hello World",
                         "template": "invoice",

@@ -7,6 +7,7 @@ This file tells coding agents and contributors how to work with this repository.
 ```bash
 uv sync
 uv sync --extra web
+uv sync --extra web --extra async-translation
 uv run local-llm-pdf-ocr input.pdf
 uv run local-llm-pdf-ocr-server --port 8000
 ```
@@ -64,7 +65,9 @@ PDF/image -> grounded bbox-native VLM -> post-process -> searchable PDF
 | `src/pdf_ocr/core/pdf.py` | PDF/image conversion and sandwich-PDF embedding |
 | `src/pdf_ocr/core/grounded.py` | Grounded backends and bbox JSON parsers |
 | `src/pdf_ocr/core/postprocess.py` | Dictionary spellcheck |
+| `src/pdf_ocr/core/translation_config.py` | Core-owned async translation settings |
 | `src/pdf_ocr/core/translation.py` | Optional LangGraph translation workflow |
+| `src/pdf_ocr/resources/dictionaries/` | Packaged spellcheck dictionaries |
 | `src/pdf_ocr/api/routers/ocr.py` | OCR, translation, extraction, and job routes |
 | `src/pdf_ocr/api/routers/config.py` | Runtime configuration and model discovery |
 | `src/pdf_ocr/utils/security.py` | SSRF target validation |
@@ -83,13 +86,12 @@ PDF/image -> grounded bbox-native VLM -> post-process -> searchable PDF
 ## Web Notes
 
 - Browser translation and structured extraction use synchronous endpoints and do not require Redis.
-- `/api/translate/async` uses Celery, Redis, and LangGraph.
+- `/api/translate/async` uses Celery, Redis, and LangGraph from the `async-translation` extra.
 - `ALLOW_SSRF_LOCAL=true` is the local-development default. Set it to `false` when exposing the server to untrusted users.
 - Web runtime settings are initialized in `api/routers/config.py`.
 
 ## Known Tech Debt
 
-- Translation dependencies are core dependencies even though asynchronous translation is optional.
 - `api/routers/ocr.py` mixes OCR, translation, extraction, and asynchronous task routes.
 - The grounded web route instantiates hybrid components even though `OCRPipeline` skips them in grounded mode.
 - `ZAIHostedOCR` remains an experimental backend.
