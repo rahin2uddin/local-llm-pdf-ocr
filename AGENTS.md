@@ -8,8 +8,8 @@ This file tells coding agents and contributors how to work with this repository.
 uv sync
 uv sync --extra web
 uv sync --extra web --extra async-translation
-uv run local-llm-pdf-ocr input.pdf
-uv run local-llm-pdf-ocr-server --port 8000
+uv run local-deepl input.pdf
+uv run local-deepl-server --port 8000
 ```
 
 Real OCR requires an OpenAI-compatible VLM endpoint. The default is LM Studio at `http://localhost:1234/v1`.
@@ -57,21 +57,21 @@ PDF/image -> grounded bbox-native VLM -> post-process -> searchable PDF
 
 | File | Role |
 | --- | --- |
-| `src/pdf_ocr/cli.py` | CLI parser and Rich progress output |
-| `src/pdf_ocr/server.py` | FastAPI application and server entry point |
-| `src/pdf_ocr/pipeline.py` | Shared hybrid and grounded orchestration |
-| `src/pdf_ocr/core/aligner.py` | Surya detection and DP alignment |
-| `src/pdf_ocr/core/ocr.py` | LiteLLM OCR calls, prompts, limits, and filters |
-| `src/pdf_ocr/core/pdf.py` | PDF/image conversion and sandwich-PDF embedding |
-| `src/pdf_ocr/core/grounded.py` | Grounded backends and bbox JSON parsers |
-| `src/pdf_ocr/core/postprocess.py` | Dictionary spellcheck |
-| `src/pdf_ocr/core/translation_config.py` | Core-owned async translation settings |
-| `src/pdf_ocr/core/translation.py` | Optional LangGraph translation workflow |
-| `src/pdf_ocr/resources/dictionaries/` | Packaged spellcheck dictionaries |
-| `src/pdf_ocr/api/routers/ocr.py` | OCR, translation, extraction, and job routes |
-| `src/pdf_ocr/api/routers/config.py` | Runtime configuration and model discovery |
-| `src/pdf_ocr/utils/security.py` | SSRF target validation |
-| `src/pdf_ocr/utils/litellm_provider.py` | LiteLLM provider selection |
+| `src/local_deepl/cli.py` | CLI parser and Rich progress output |
+| `src/local_deepl/server.py` | FastAPI application and server entry point |
+| `src/local_deepl/pipeline.py` | Shared hybrid and grounded orchestration |
+| `src/local_deepl/core/aligner.py` | Surya detection and DP alignment |
+| `src/local_deepl/core/ocr.py` | LiteLLM OCR calls, prompts, limits, and filters |
+| `src/local_deepl/core/pdf.py` | PDF/image conversion and sandwich-PDF embedding |
+| `src/local_deepl/core/grounded.py` | Grounded backends and bbox JSON parsers |
+| `src/local_deepl/core/postprocess.py` | Dictionary spellcheck |
+| `src/local_deepl/core/translation_config.py` | Core-owned async translation settings |
+| `src/local_deepl/core/translation.py` | Optional LangGraph translation workflow |
+| `src/local_deepl/resources/dictionaries/` | Packaged spellcheck dictionaries |
+| `src/local_deepl/api/routers/ocr.py` | OCR, translation, extraction, and job routes |
+| `src/local_deepl/api/routers/config.py` | Runtime configuration and model discovery |
+| `src/local_deepl/utils/security.py` | SSRF target validation |
+| `src/local_deepl/utils/litellm_provider.py` | LiteLLM provider selection |
 
 ## Extension Points
 

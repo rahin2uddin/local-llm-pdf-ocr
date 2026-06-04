@@ -7,7 +7,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from pdf_ocr.core.ocr import (
+from local_deepl.core.ocr import (
     CROP_PROMPT,
     OLMOCR_PAGE_PROMPT,
     LLMCallError,
@@ -94,7 +94,7 @@ class TestHallucinationFilter:
         in the searchable text layer."""
         import asyncio
 
-        from pdf_ocr.core.ocr import OCRProcessor
+        from local_deepl.core.ocr import OCRProcessor
 
         ocr = OCRProcessor.__new__(OCRProcessor)  # skip real init
         ocr.client = None  # never used; we override _chat below
@@ -111,7 +111,7 @@ class TestHallucinationFilter:
     def test_normal_crop_response_passes_through(self):
         import asyncio
 
-        from pdf_ocr.core.ocr import OCRProcessor
+        from local_deepl.core.ocr import OCRProcessor
 
         ocr = OCRProcessor.__new__(OCRProcessor)
         ocr.client = None
@@ -130,7 +130,7 @@ class TestHallucinationFilter:
         # when the response IS the pangram, not when it merely contains it.
         import asyncio
 
-        from pdf_ocr.core.ocr import OCRProcessor
+        from local_deepl.core.ocr import OCRProcessor
 
         ocr = OCRProcessor.__new__(OCRProcessor)
         ocr.client = None
@@ -153,7 +153,7 @@ class TestHallucinationFilter:
         # normalization must still recognise it as the fallback.
         import asyncio
 
-        from pdf_ocr.core.ocr import OCRProcessor
+        from local_deepl.core.ocr import OCRProcessor
 
         def _make_fake(response: str):
             async def _fake(*a, **kw):

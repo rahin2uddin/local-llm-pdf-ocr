@@ -27,15 +27,15 @@ def test_server_module_import_does_not_import_web_dependencies(
         return original_import(name, globals, locals, fromlist, level)
 
     monkeypatch.setattr(builtins, "__import__", block_web_imports)
-    sys.modules.pop("pdf_ocr.server", None)
+    sys.modules.pop("local_deepl.server", None)
 
-    server = importlib.import_module("pdf_ocr.server")
+    server = importlib.import_module("local_deepl.server")
 
     assert isinstance(server.app, server.LazyASGIApp)
 
 
 def test_create_app_reports_missing_web_extra(monkeypatch: pytest.MonkeyPatch):
-    from pdf_ocr import server
+    from local_deepl import server
 
     original_import_module = importlib.import_module
 
@@ -52,11 +52,11 @@ def test_create_app_reports_missing_web_extra(monkeypatch: pytest.MonkeyPatch):
     message = str(exc_info.value)
     assert "fastapi" in message
     assert "uv sync --extra web" in message
-    assert "local-llm-pdf-ocr[web]" in message
+    assert "local-deepl[web]" in message
 
 
 def test_main_reports_missing_uvicorn_as_system_exit(monkeypatch: pytest.MonkeyPatch):
-    from pdf_ocr import server
+    from local_deepl import server
 
     original_import_module = importlib.import_module
 

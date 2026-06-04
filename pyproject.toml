@@ -1,5 +1,5 @@
 [project]
-name = "local-llm-pdf-ocr"
+name = "local-deepl"
 version = "0.1.0"
 description = "Transform scanned and written documents into fully searchable, selectable PDFs using the power of Local LLM Vision"
 readme = "README.md"
@@ -63,13 +63,13 @@ translation = [
 ]
 
 [project.scripts]
-local-llm-pdf-ocr = "pdf_ocr.cli:main"
-local-llm-pdf-ocr-server = "pdf_ocr.server:main"
+local-deepl = "local_deepl.cli:main"
+local-deepl-server = "local_deepl.server:main"
 
 [project.urls]
-Homepage = "https://github.com/Sifr-r/local-llm-pdf-ocr"
-Repository = "https://github.com/Sifr-r/local-llm-pdf-ocr"
-Issues = "https://github.com/Sifr-r/local-llm-pdf-ocr/issues"
+Homepage = "https://github.com/Sifr-r/LocalDeepL"
+Repository = "https://github.com/Sifr-r/LocalDeepL"
+Issues = "https://github.com/Sifr-r/LocalDeepL/issues"
 
 [build-system]
 requires = ["hatchling"]
@@ -82,11 +82,11 @@ exclude = [
 ]
 
 [tool.hatch.build.targets.wheel]
-packages = ["src/pdf_ocr"]
+packages = ["src/local_deepl"]
 
 [tool.hatch.build.targets.sdist]
 include = [
-    "src/pdf_ocr",
+    "src/local_deepl",
     "README.md",
     "LICENSE",
     "pyproject.toml",

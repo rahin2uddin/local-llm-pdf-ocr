@@ -13,7 +13,7 @@ from pathlib import Path
 import fitz
 import pytest
 
-from pdf_ocr.core.pdf import PDFHandler
+from local_deepl.core.pdf import PDFHandler
 
 
 @pytest.fixture
@@ -182,7 +182,7 @@ def test_embed_multiframe_tiff_produces_multipage_pdf(
 
 
 def test_image_extension_detection():
-    from pdf_ocr.core.pdf import _is_image_path
+    from local_deepl.core.pdf import _is_image_path
     assert _is_image_path("scan.jpg")
     assert _is_image_path("SCAN.JPEG")
     assert _is_image_path("pages.tiff")
@@ -204,7 +204,7 @@ def test_is_blank_crop_distinguishes_blank_from_text(tmp_path: Path):
 
     from PIL import Image, ImageDraw
 
-    from pdf_ocr.utils.image import is_blank_crop
+    from local_deepl.utils.image import is_blank_crop
 
     # Build a page-like image: top half blank-white, bottom half has text.
     img = Image.new("RGB", (800, 1000), "white")

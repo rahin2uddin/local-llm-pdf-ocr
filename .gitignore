@@ -182,7 +182,7 @@ cython_debug/
 .claude/
 
 # Custom resources. Root dictionaries are retained as a legacy runtime
-# fallback; installable dictionaries live under src/pdf_ocr/resources.
+# fallback; installable dictionaries live under src/local_deepl/resources.
 /resources/*
 !/resources/dictionaries/
 !/resources/dictionaries/*.json.gz

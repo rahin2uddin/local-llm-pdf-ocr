@@ -15,10 +15,13 @@ pytest.importorskip("fastapi")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from pdf_ocr.api.routers import ai, config, ocr, websocket
-from pdf_ocr.api.services.artifacts import TextArtifactStore
-from pdf_ocr.api.services.security import UploadValidationError, save_validated_upload
-from pdf_ocr.utils.security import is_ssrf_target
+from local_deepl.api.routers import ai, config, ocr, websocket
+from local_deepl.api.services.artifacts import TextArtifactStore
+from local_deepl.api.services.security import (
+    UploadValidationError,
+    save_validated_upload,
+)
+from local_deepl.utils.security import is_ssrf_target
 
 
 class _AsyncUpload:
@@ -76,7 +79,7 @@ def _pdf_upload() -> tuple[str, bytes, str]:
 
 def test_ssrf_fails_closed_and_requires_explicit_local_allowance():
     with patch.dict(os.environ, {}, clear=True):
-        with patch("pdf_ocr.utils.security.socket.getaddrinfo") as getaddrinfo:
+        with patch("local_deepl.utils.security.socket.getaddrinfo") as getaddrinfo:
             getaddrinfo.side_effect = _public_dns
             assert is_ssrf_target("http://api.openai.com/v1") is False
             assert is_ssrf_target("localhost:1234/v1") is True
@@ -84,7 +87,7 @@ def test_ssrf_fails_closed_and_requires_explicit_local_allowance():
             assert is_ssrf_target(None) is True
 
     with patch.dict(os.environ, {}, clear=True):
-        with patch("pdf_ocr.utils.security.socket.getaddrinfo") as getaddrinfo:
+        with patch("local_deepl.utils.security.socket.getaddrinfo") as getaddrinfo:
             getaddrinfo.side_effect = socket.gaierror(-2, "Name or service not known")
             assert is_ssrf_target("http://does-not-resolve.example/v1") is True
 
@@ -136,18 +139,18 @@ def test_process_issues_opaque_text_artifact_ids_and_prevents_client_id_lookup(
     client = _api_client()
 
     with (
-        patch("pdf_ocr.utils.security.socket.getaddrinfo", side_effect=_public_dns),
-        patch("pdf_ocr.api.routers.ocr.OCRPipeline", DummyPipeline),
+        patch("local_deepl.utils.security.socket.getaddrinfo", side_effect=_public_dns),
+        patch("local_deepl.api.routers.ocr.OCRPipeline", DummyPipeline),
         patch(
-            "pdf_ocr.api.routers.ocr.OCRProcessor",
+            "local_deepl.api.routers.ocr.OCRProcessor",
             lambda *args, **kwargs: SimpleNamespace(),
         ),
         patch(
-            "pdf_ocr.api.routers.ocr.HybridAligner",
+            "local_deepl.api.routers.ocr.HybridAligner",
             lambda *args, **kwargs: SimpleNamespace(),
         ),
         patch(
-            "pdf_ocr.api.routers.ocr.PDFHandler",
+            "local_deepl.api.routers.ocr.PDFHandler",
             lambda *args, **kwargs: SimpleNamespace(),
         ),
     ):
@@ -247,7 +250,7 @@ def test_translate_error_response_does_not_expose_internal_exception():
 
     client = _api_client()
     with (
-        patch("pdf_ocr.utils.security.socket.getaddrinfo", side_effect=_public_dns),
+        patch("local_deepl.utils.security.socket.getaddrinfo", side_effect=_public_dns),
         patch("litellm.acompletion", fail_completion),
     ):
         response = client.post(
@@ -268,7 +271,7 @@ def test_translate_error_response_does_not_expose_internal_exception():
 
 
 def test_static_js_has_no_html_injection_sinks():
-    static_js = Path("src/pdf_ocr/static/js")
+    static_js = Path("src/local_deepl/static/js")
     for path in static_js.glob("*.js"):
         source = path.read_text(encoding="utf-8")
         assert "innerHTML" not in source

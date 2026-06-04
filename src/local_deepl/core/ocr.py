@@ -1,0 +1,462 @@
+"""
+OCRProcessor - LLM-based OCR processing.
+
+Uses a local vision LLM (OlmOCR via LM Studio by default; any OpenAI-compatible
+endpoint works, including GLM OCR via Ollama — set LLM_API_BASE/LLM_MODEL or
+pass --api-base/--model).
+"""
+
+import asyncio
+import logging
+import os
+import re
+
+import litellm
+from dotenv import load_dotenv
+from openai import AsyncOpenAI
+
+from local_deepl.utils.litellm_provider import resolve_custom_provider
+
+load_dotenv()
+
+
+class LLMCallError(RuntimeError):
+    """Raised when a call to the local LLM OCR endpoint fails.
+
+    Wraps the underlying exception (connection refused, model not loaded,
+    timeout, auth, ...) with a message that names the api-base and model
+    so the user can diagnose without digging through a stack trace.
+    """
+
+
+class ModelNotLoadedError(LLMCallError):
+    """Raised when the requested model is not loaded on the LLM server.
+
+    LM Studio silently falls back to whatever model is currently loaded
+    when an OpenAI-compat client requests an unavailable model ID — so a
+    typo in --model or a forgotten model swap produces subtly wrong OCR
+    output with no surface error. This exception is raised by
+    :meth:`OCRProcessor.ensure_model_loaded` (and the grounded equivalent)
+    *before* any OCR work starts so the user sees the mismatch immediately
+    instead of debugging strange output later.
+    """
+
+
+# Canonical OlmOCR-2 prompt (the model was RL-trained on this exact string).
+# Source: github.com/allenai/olmocr olmocr/prompts/prompts.py
+# :func:`build_no_anchoring_v4_yaml_prompt`.
+OLMOCR_PAGE_PROMPT = (
+    "Attached is one page of a document that you must process. Just return "
+    "the plain text representation of this document as if you were reading it "
+    "naturally. Convert equations to LateX and tables to HTML.\n"
+    "If there are any figures or charts, label them with the following "
+    "markdown syntax ![Alt text describing the contents of the figure]"
+    "(page_startx_starty_width_height.png)\n"
+    "Return your output as markdown, with a front matter section on top "
+    "specifying values for the primary_language, is_rotation_valid, "
+    "rotation_correction, is_table, and is_diagram parameters."
+)
+
+# Prompt for cropped box regions — we want raw text only, no metadata
+# (the YAML front matter is nonsensical for a single line/region).
+CROP_PROMPT = """
+You are a highly accurate OCR assistant.
+Extract all text from the provided image crop exactly as it appears.
+CRITICAL INSTRUCTION: Pay extremely close attention to all diacritical marks (e.g. Arabic Tashkeel, French accents, German umlauts). They are deliberate and must be transcribed accurately. Do not dismiss them as speckles or background noise.
+Output only the plain text with no markdown formatting or other commentary.
+"""
+
+DUAL_ENGINE_PAGE_PROMPT = """
+You are a highly accurate OCR assistant.
+Extract all text from the provided page image exactly as it appears.
+CRITICAL INSTRUCTION: Pay extremely close attention to all diacritical marks (e.g. Arabic Tashkeel, French accents, German umlauts). They are deliberate and must be transcribed accurately. Do not dismiss them as speckles or background noise.
+You are given a rough, error-prone draft transcription from a legacy OCR engine. Use it as a hint, but rely on the image for the final correct text, paying special attention to correcting hallucinations and diacritics in the draft.
+
+DRAFT HINT:
+{draft_text}
+
+Output only the corrected transcribed text, without any conversational formatting or commentary.
+"""
+
+DUAL_ENGINE_CROP_PROMPT = """
+You are a highly accurate OCR assistant.
+Extract all text from the provided image crop exactly as it appears.
+CRITICAL INSTRUCTION: Pay extremely close attention to all diacritical marks (e.g. Arabic Tashkeel, French accents, German umlauts). They are deliberate and must be transcribed accurately. Do not dismiss them as speckles or background noise.
+You are given a rough draft transcription from a legacy OCR engine. Use it as a hint, but rely on the image for the final correct text.
+
+DRAFT HINT:
+{draft_text}
+
+Output only the corrected transcribed text, without any conversational formatting or commentary.
+"""
+
+CORRECTION_PAGE_PROMPT = (
+    "Attached is an image of a document and a draft transcription. The draft may contain minor "
+    "errors such as missing diacritics, incorrect characters, or hallucinated words (especially in Arabic script). "
+    "Carefully compare the draft to the image and output the perfectly corrected text in the same format.\n"
+    "Draft Transcription:\n"
+    "---\n"
+    "{draft_text}\n"
+    "---\n"
+    "Please provide only the corrected transcription with no additional commentary."
+)
+
+CORRECTION_CROP_PROMPT = (
+    "Attached is an image of a cropped text region and a draft transcription. "
+    "Carefully compare the draft to the image and output the perfectly corrected text on a single line. "
+    "Fix any missing diacritics or incorrect characters (especially for Arabic script). "
+    "Output only the plain text with no explanation.\n"
+    "Draft Transcription: {draft_text}"
+)
+
+
+# Phrases the model emits as a fallback when it can't read the crop —
+# usually because the crop is blank, decorative, or otherwise non-text.
+# We strip them so they don't pollute the searchable text layer.
+_HALLUCINATION_PATTERNS = (
+    "the quick brown fox jumps over the lazy dog",  # OlmOCR-2 pangram fallback
+    "lorem ipsum",
+)
+
+
+def _is_fallback_response(text: str) -> bool:
+    """
+    True if ``text`` is essentially one of the known LLM fallback phrases.
+
+    A substring match would over-trigger: a real document might contain
+    "lorem ipsum" as quoted placeholder text, or the pangram as an
+    example sentence. We require the response to *be* the fallback
+    after light normalization (case-fold, strip whitespace, drop
+    surrounding punctuation/quotes) — i.e. the fallback occupies the
+    entire crop response, not just part of it.
+    """
+    _trim = ".!?\"'`)([]{}<>“”‘’ \t"
+    normalized = text.strip().lower().strip(_trim)
+    return normalized in _HALLUCINATION_PATTERNS
+
+
+class OCRProcessor:
+    """LLM-based OCR processor over an OpenAI-compatible async client.
+
+    Local VLMs occasionally fall into runaway-generation loops on dense
+    or unusual pages — we bound both the per-call timeout and the
+    response token budget so a single bad page can't hang the pipeline
+    indefinitely. Tuned per-call (full-page vs single-line crop): a page
+    can legitimately take longer than a crop, and warrants a higher token
+    budget for paragraph-level content.
+    """
+
+    # Page-level OCR (full image): up to ~4 minutes, ~6k tokens of output.
+    # Dense handwritten pages with tables can easily produce 2-3k tokens
+    # of markdown, so 6k leaves headroom without enabling endless loops.
+    PAGE_TIMEOUT_S: float = 240.0
+    PAGE_MAX_TOKENS: int = 6144
+
+    # Crop-level OCR (single box): a sentence at most. Capping much
+    # tighter prevents a confused model from emitting a whole-page worth
+    # of hallucinated text into one bbox during the refine stage.
+    CROP_TIMEOUT_S: float = 60.0
+    CROP_MAX_TOKENS: int = 256
+
+    def __init__(self, api_base: str | None = None, api_key: str | None = None, model: str | None = None):
+        self.api_base: str = api_base or os.getenv("LLM_API_BASE") or "http://localhost:1234/v1"
+        self.api_key: str = api_key or os.getenv("LLM_API_KEY") or "lm-studio"
+        self.model: str = model or os.getenv("LLM_MODEL") or "allenai/olmocr-2-7b"
+        self.client = AsyncOpenAI(base_url=self.api_base, api_key=self.api_key)
+
+    async def ensure_model_loaded(self) -> None:
+        """Pre-flight check that ``self.model`` is loaded on the server.
+
+        Hits ``GET /v1/models`` via the OpenAI SDK and verifies the
+        configured model ID appears in the loaded list (case-insensitive).
+        Raises :class:`ModelNotLoadedError` on mismatch with a message
+        that names what's loaded and how to fix it. Wraps any underlying
+        transport / auth failure in :class:`LLMCallError`.
+
+        Why we do this: see :class:`ModelNotLoadedError`. Cheap call (one
+        GET, no inference); call once at pipeline startup before paying
+        for image conversion or detection.
+        """
+        loaded = await _list_loaded_model_ids(self.client, self.api_base)
+        if not _model_in_loaded(self.model, loaded):
+            raise ModelNotLoadedError(
+                _format_model_not_loaded(self.api_base, self.model, loaded)
+            )
+
+    async def perform_ocr(self, image_base64: str, self_correction: bool = False, binarize: bool = False, dual_engine: bool = False) -> list[str]:
+        """
+        OCR a full page image. Returns a list of non-empty lines in reading order.
+
+        YAML front matter emitted by OlmOCR (rotation/language/is_table flags)
+        is stripped before returning. Runaway repetition (the model getting
+        stuck emitting the same line over and over) is detected and clipped
+        — this happens occasionally on dense handwritten pages even with
+        max_tokens set, and pollutes downstream alignment with junk lines.
+        """
+        if binarize:
+            image_base64 = await asyncio.to_thread(self._apply_adaptive_threshold, image_base64)
+
+        prompt = OLMOCR_PAGE_PROMPT
+        if dual_engine:
+            draft = await asyncio.to_thread(self._get_tesseract_draft, image_base64)
+            if draft:
+                prompt = DUAL_ENGINE_PAGE_PROMPT.replace("{draft_text}", draft)
+
+        text = await self._chat(
+            prompt, image_base64,
+            timeout=self.PAGE_TIMEOUT_S,
+            max_tokens=self.PAGE_MAX_TOKENS,
+        )
+        if not text:
+            return []
+
+        if self_correction:
+            correction_prompt = CORRECTION_PAGE_PROMPT.replace("{draft_text}", text)
+            text = await self._chat(
+                correction_prompt, image_base64,
+                timeout=self.PAGE_TIMEOUT_S,
+                max_tokens=self.PAGE_MAX_TOKENS,
+            )
+            if not text:
+                return []
+
+        body = _strip_yaml_front_matter(text)
+        lines = [line.strip() for line in body.split("\n") if line.strip()]
+        return _strip_runaway_repetition(lines)
+
+    async def perform_ocr_on_crop(self, image_base64: str, self_correction: bool = False, binarize: bool = False, dual_engine: bool = False) -> str:
+        """
+        OCR a single cropped box region. Returns a single whitespace-joined
+        string (the crop is small, so we don't try to preserve line structure).
+        Empty-string for blank/uncertain crops (filtered hallucination).
+        """
+        if binarize:
+            image_base64 = await asyncio.to_thread(self._apply_adaptive_threshold, image_base64)
+
+        prompt = CROP_PROMPT
+        if dual_engine:
+            draft = await asyncio.to_thread(self._get_tesseract_draft, image_base64)
+            if draft:
+                prompt = DUAL_ENGINE_CROP_PROMPT.replace("{draft_text}", draft)
+
+        text = await self._chat(
+            prompt, image_base64,
+            timeout=self.CROP_TIMEOUT_S,
+            max_tokens=self.CROP_MAX_TOKENS,
+        )
+        if not text:
+            return ""
+
+        if self_correction:
+            correction_prompt = CORRECTION_CROP_PROMPT.replace("{draft_text}", text)
+            text = await self._chat(
+                correction_prompt, image_base64,
+                timeout=self.CROP_TIMEOUT_S,
+                max_tokens=self.CROP_MAX_TOKENS,
+            )
+            if not text:
+                return ""
+
+        body = _strip_yaml_front_matter(text)
+        result = " ".join(line.strip() for line in body.split("\n") if line.strip())
+        if _is_fallback_response(result):
+            return ""
+        return result
+
+    async def _chat(
+        self,
+        prompt: str,
+        image_base64: str,
+        *,
+        timeout: float,
+        max_tokens: int,
+    ) -> str:
+        litellm_model = self.model
+        custom_provider = resolve_custom_provider(litellm_model)
+
+        try:
+            response = await litellm.acompletion(
+                model=litellm_model,
+                custom_llm_provider=custom_provider,
+                api_base=self.api_base,
+                api_key=self.api_key,
+                temperature=0.1,
+                max_tokens=max_tokens,
+                timeout=timeout,
+                messages=[
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {
+                                    "url": f"data:image/png;base64,{image_base64}"
+                                },
+                            },
+                        ],
+                    }
+                ],
+            )
+            return (response.choices[0].message.content or "").strip()
+        except Exception as e:
+            err_msg = str(e)
+            if any(term in err_msg.lower() for term in ("context size", "context_length_exceeded", "context length")):
+                raise LLMCallError(
+                    f"LLM OCR call failed due to Context Size Limit. "
+                    f"Please load the model in LM Studio and increase the 'Context Length' in the right-side panel "
+                    f"to at least 8192 or 16384 tokens. "
+                    f"Underlying error: {e}"
+                ) from e
+            raise LLMCallError(
+                f"LLM OCR call failed against {self.api_base} "
+                f"({type(e).__name__}): {e}"
+            ) from e
+
+    def _get_tesseract_draft(self, image_base64: str) -> str:
+        try:
+            import base64
+            import io
+
+            import pytesseract
+            from PIL import Image
+
+            image_bytes = base64.b64decode(image_base64)
+            img = Image.open(io.BytesIO(image_bytes))
+            # Fallback to multiple common languages (or just Arabic/English for this workload)
+            draft = pytesseract.image_to_string(img, lang="ara+eng")
+            return draft.strip()
+        except Exception:
+            return ""
+
+    def _apply_adaptive_threshold(self, image_base64: str) -> str:
+        try:
+            import base64
+
+            import cv2
+            import numpy as np
+
+            image_bytes = base64.b64decode(image_base64)
+            np_arr = np.frombuffer(image_bytes, np.uint8)
+            img = cv2.imdecode(np_arr, cv2.IMREAD_GRAYSCALE)
+
+            if img is None:
+                return image_base64
+
+            # Apply adaptive thresholding to extract ink cleanly
+            # Block size 21, constant 15 gives robust separation for handwriting
+            binary = cv2.adaptiveThreshold(
+                img, 255, cv2.ADAPTIVE_THRESH_GAUSSIAN_C, cv2.THRESH_BINARY, 21, 15
+            )
+
+            success, encoded = cv2.imencode('.png', binary)
+            if not success:
+                return image_base64
+
+            return base64.b64encode(encoded.tobytes()).decode('utf-8')
+        except Exception:
+            return image_base64
+
+
+def _strip_runaway_repetition(lines: list[str], max_repeat: int = 20) -> list[str]:
+    """
+    Drop pathological repetition from LLM output.
+
+    Local VLMs occasionally fall into an output loop on dense or unusual
+    pages — the same line is emitted dozens or hundreds of times in a row
+    until max_tokens cuts the response off. The repeated junk pollutes
+    every box the DP then tries to assign it to. We cap any single string
+    at ``max_repeat`` total occurrences across the response: large enough
+    to admit legitimate repeated structure (table row tags, separators)
+    but small enough that runaway loops are clipped to a handful of lines
+    and the rest is dropped.
+
+    A warning is emitted if any clipping happened so the user knows the
+    OCR layer for that page may be incomplete.
+    """
+    counts: dict[str, int] = {}
+    out: list[str] = []
+    truncated = 0
+    for line in lines:
+        c = counts.get(line, 0) + 1
+        counts[line] = c
+        if c <= max_repeat:
+            out.append(line)
+        else:
+            truncated += 1
+    if truncated > 0:
+        worst = max(counts.items(), key=lambda kv: kv[1])
+        logging.warning(
+            "LLM OCR output had %d runaway-repetition lines clipped "
+            "(worst offender: %r occurred %d times). The model likely "
+            "got stuck on this page; output may be incomplete. "
+            "Try lowering --max-image-dim or switching --model.",
+            truncated, worst[0][:60], worst[1],
+        )
+    return out
+
+
+async def _list_loaded_model_ids(client: AsyncOpenAI, api_base: str) -> list[str]:
+    """Return model IDs loaded on an OpenAI-compatible server.
+
+    Uses the SDK's ``client.models.list()`` (hits ``GET /v1/models``).
+    Wraps any transport / auth / response-shape failure in
+    :class:`LLMCallError` with the same diagnostic format ``_chat`` uses
+    so the caller sees a consistent error message style across the
+    pipeline's LLM-facing surfaces.
+    """
+    try:
+        page = await client.models.list()
+    except Exception as e:
+        raise LLMCallError(
+            f"Could not list models on {api_base}: "
+            f"{type(e).__name__}: {e}\n"
+            f"  - Is your local LLM server (LM Studio / Ollama / vLLM) running at "
+            f"{api_base}?\n"
+            f"  - Does it expose GET /v1/models? (Most do; some custom servers "
+            f"don't — pass --no-verify-model to skip this check.)"
+        ) from e
+    return [m.id for m in page.data] if page.data else []
+
+
+def _model_in_loaded(model: str, loaded: list[str]) -> bool:
+    target = model.lower()
+    return any(m.lower() == target for m in loaded)
+
+
+def _format_model_not_loaded(api_base: str, model: str, loaded: list[str]) -> str:
+    listing = "\n    ".join(loaded) if loaded else "(none)"
+    return (
+        f"Model {model!r} is not loaded on {api_base}.\n"
+        f"  Loaded models:\n    {listing}\n"
+        f"  Fix:\n"
+        f"    - Load {model!r} in LM Studio (Models -> search -> Load), then retry.\n"
+        f"    - Or pass --model with one of the loaded model IDs above.\n"
+        f"    - Or pass --no-verify-model to skip this check "
+        f"(e.g. on Ollama / vLLM, which auto-load on demand).\n"
+        f"  Why this matters: LM Studio silently falls back to whatever model is "
+        f"loaded when the requested one is missing, producing subtly wrong OCR "
+        f"results with no error. (issue #7)"
+    )
+
+
+def _strip_yaml_front_matter(text: str) -> str:
+    """
+    If the response begins with a YAML front matter block (--- ... ---),
+    return the body after it. Otherwise return the input unchanged.
+    Robust to models that ignore the front-matter instruction or wrap it
+    in markdown code fences.
+    """
+    t = re.sub(r"^\s*```[a-zA-Z]*\n?", "", text).lstrip()
+    if not t.startswith("---"):
+        return text
+    # Find the closing fence on its own line, after the opening fence.
+    rest = t[3:]
+    close_idx = rest.find("\n---")
+    if close_idx == -1:
+        return text  # malformed; return as-is
+    body = rest[close_idx + len("\n---"):]
+    # Remove optional closing ``` if it was part of a markdown fence
+    body = re.sub(r"^\s*```\n?", "", body)
+    # Trim the newline directly after the closing fence.
+    return body.lstrip("\n").strip()

@@ -7,11 +7,11 @@ Repository guidance for Claude Code. Read `AGENTS.md` first; it contains the sha
 ```bash
 uv sync
 uv sync --extra web
-uv run local-llm-pdf-ocr input.pdf
-uv run local-llm-pdf-ocr input.pdf output.pdf --pages 1-3,5 --dpi 300
-uv run local-llm-pdf-ocr notes.pdf --dense-mode always --concurrency 5
-uv run local-llm-pdf-ocr scan.pdf --grounded --model qwen/qwen3-vl-8b
-uv run local-llm-pdf-ocr-server --port 8000
+uv run local-deepl input.pdf
+uv run local-deepl input.pdf output.pdf --pages 1-3,5 --dpi 300
+uv run local-deepl notes.pdf --dense-mode always --concurrency 5
+uv run local-deepl scan.pdf --grounded --model qwen/qwen3-vl-8b
+uv run local-deepl-server --port 8000
 uv run pytest -m "not slow"
 uv run ruff check src tests
 uv run mypy src

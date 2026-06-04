@@ -11,8 +11,8 @@ from pathlib import Path
 
 import pytest
 
-import pdf_ocr.core.postprocess as postprocess
-from pdf_ocr.core.postprocess import DictionaryPostProcessor
+import local_deepl.core.postprocess as postprocess
+from local_deepl.core.postprocess import DictionaryPostProcessor
 
 
 @pytest.fixture
@@ -119,7 +119,7 @@ async def test_packaged_dictionary_lookup_precedes_legacy_resources(monkeypatch)
     package_dict_path = (
         Path(__file__).parents[1]
         / "src"
-        / "pdf_ocr"
+        / "local_deepl"
         / "resources"
         / "dictionaries"
         / "eng.json.gz"

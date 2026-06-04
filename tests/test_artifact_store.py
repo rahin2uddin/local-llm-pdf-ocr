@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parent.parent
-ARTIFACTS_PATH = ROOT / "src" / "pdf_ocr" / "api" / "services" / "artifacts.py"
+ARTIFACTS_PATH = ROOT / "src" / "local_deepl" / "api" / "services" / "artifacts.py"
 SPEC = util.spec_from_file_location("artifact_service_under_test", ARTIFACTS_PATH)
 assert SPEC is not None
 assert SPEC.loader is not None

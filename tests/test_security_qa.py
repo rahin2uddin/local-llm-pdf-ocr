@@ -11,9 +11,9 @@ from unittest.mock import patch
 
 import pytest
 
-from pdf_ocr.api.tasks import process_translation_task
-from pdf_ocr.core.translation import chunk_text, evaluate_node
-from pdf_ocr.utils.security import is_ssrf_target
+from local_deepl.api.tasks import process_translation_task
+from local_deepl.core.translation import chunk_text, evaluate_node
+from local_deepl.utils.security import is_ssrf_target
 
 
 def test_is_ssrf_target_defaults():
@@ -116,7 +116,7 @@ def test_celery_task_raises_value_error_on_translation_error():
     # We patch 'update_state' to prevent it from complaining about missing task context during test run.
     with patch.object(process_translation_task, "update_state"):
         with patch(
-            "pdf_ocr.core.translation.run_translation",
+            "local_deepl.core.translation.run_translation",
             return_value="[Translation Error: Connection refused]",
         ):
             with pytest.raises(ValueError) as exc_info:
@@ -126,7 +126,7 @@ def test_celery_task_raises_value_error_on_translation_error():
 
 def test_extract_data_robust_json_parsing():
     pytest.importorskip("fastapi")
-    from pdf_ocr.api.routers import ocr
+    from local_deepl.api.routers import ocr
 
     # Verify our custom regex fallback in ocr.py doesn't crash when JSON matches are missing or fail
     async def mock_acompletion(*args, **kwargs):
@@ -147,7 +147,7 @@ def test_extract_data_robust_json_parsing():
         mock_search.return_value = None  # No matching bracket/braces found
 
         # We call the FastAPI handler synchronously via standard coroutine run
-        with patch("pdf_ocr.utils.security.socket.getaddrinfo") as mock_getaddrinfo:
+        with patch("local_deepl.utils.security.socket.getaddrinfo") as mock_getaddrinfo:
             mock_getaddrinfo.return_value = [
                 (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("104.18.3.161", 443))
             ]

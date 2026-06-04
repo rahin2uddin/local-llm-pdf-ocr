@@ -7,7 +7,7 @@ import subprocess
 import sys
 from types import SimpleNamespace
 
-from pdf_ocr.core.translation_config import TranslationSettings
+from local_deepl.core.translation_config import TranslationSettings
 
 
 def test_translation_base_imports_do_not_require_async_extras():
@@ -25,8 +25,8 @@ class BlockAsyncExtras(importlib.abc.MetaPathFinder):
 
 sys.meta_path.insert(0, BlockAsyncExtras())
 
-from pdf_ocr.api.tasks import process_translation_task
-from pdf_ocr.core.translation import chunk_text, evaluate_node
+from local_deepl.api.tasks import process_translation_task
+from local_deepl.core.translation import chunk_text, evaluate_node
 
 assert chunk_text("hello") == ["hello"]
 assert evaluate_node({"source_chunk": ".", "translated_chunk": "", "attempts": 1})["evaluation_score"] == 1.0
@@ -52,7 +52,7 @@ assert process_translation_task.__name__ == "process_translation_task"
 
 
 def test_translate_node_uses_injected_settings(monkeypatch):
-    import pdf_ocr.core.translation as translation
+    import local_deepl.core.translation as translation
 
     captured = {}
 

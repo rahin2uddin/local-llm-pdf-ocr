@@ -2,7 +2,7 @@ $ErrorActionPreference = "Stop"
 $ScriptDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 
 Write-Host "======================================================="
-Write-Host "Installing Local LLM PDF OCR Dependencies"
+Write-Host "Installing LocalDeepL Dependencies"
 Write-Host "======================================================="
 
 # 1. Check/Install uv
@@ -38,7 +38,7 @@ $WshShell = New-Object -comObject WScript.Shell
 
 # Desktop Shortcut
 $DesktopPath = [Environment]::GetFolderPath("Desktop")
-$ShortcutPath = Join-Path -Path $DesktopPath -ChildPath "Local LLM PDF OCR.lnk"
+$ShortcutPath = Join-Path -Path $DesktopPath -ChildPath "LocalDeepL.lnk"
 $Shortcut = $WshShell.CreateShortcut($ShortcutPath)
 $Shortcut.TargetPath = Join-Path -Path $ScriptDir -ChildPath "start_app.vbs"
 $Shortcut.WorkingDirectory = $ScriptDir
@@ -48,7 +48,7 @@ Write-Host "Created Desktop Shortcut: $ShortcutPath"
 
 # Start Menu Shortcut
 $StartMenuPath = [Environment]::GetFolderPath("Programs")
-$ShortcutPathSM = Join-Path -Path $StartMenuPath -ChildPath "Local LLM PDF OCR.lnk"
+$ShortcutPathSM = Join-Path -Path $StartMenuPath -ChildPath "LocalDeepL.lnk"
 $ShortcutSM = $WshShell.CreateShortcut($ShortcutPathSM)
 $ShortcutSM.TargetPath = Join-Path -Path $ScriptDir -ChildPath "start_app.vbs"
 $ShortcutSM.WorkingDirectory = $ScriptDir
@@ -57,7 +57,7 @@ $ShortcutSM.Save()
 Write-Host "Created Start Menu Shortcut: $ShortcutPathSM"
 
 # Stop Shortcut (Start Menu)
-$StopShortcutPathSM = Join-Path -Path $StartMenuPath -ChildPath "Stop Local LLM PDF OCR.lnk"
+$StopShortcutPathSM = Join-Path -Path $StartMenuPath -ChildPath "Stop LocalDeepL.lnk"
 $StopShortcutSM = $WshShell.CreateShortcut($StopShortcutPathSM)
 $StopShortcutSM.TargetPath = Join-Path -Path $ScriptDir -ChildPath "stop_app.bat"
 $StopShortcutSM.WorkingDirectory = $ScriptDir

@@ -13,7 +13,7 @@ import io
 import pytest
 from PIL import Image
 
-from pdf_ocr.pipeline import (
+from local_deepl.pipeline import (
     OCRPipeline,
     _drop_refined_duplicates,
     _is_refinable,

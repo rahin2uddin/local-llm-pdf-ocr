@@ -7,8 +7,8 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from pdf_ocr.api.routers import ai, config
-from pdf_ocr.api.services.security import SAFE_API_BASE_ERROR
+from local_deepl.api.routers import ai, config
+from local_deepl.api.services.security import SAFE_API_BASE_ERROR
 
 
 def _api_client() -> TestClient:
@@ -30,7 +30,7 @@ def test_translate_provider_error_response_is_stable():
 
     client = _api_client()
     with (
-        patch("pdf_ocr.api.services.ai.is_ssrf_target", return_value=False),
+        patch("local_deepl.api.services.ai.is_ssrf_target", return_value=False),
         patch("litellm.acompletion", fail_completion),
     ):
         response = client.post(
@@ -56,7 +56,7 @@ def test_extract_invalid_json_returns_empty_object():
 
     client = _api_client()
     with (
-        patch("pdf_ocr.api.services.ai.is_ssrf_target", return_value=False),
+        patch("local_deepl.api.services.ai.is_ssrf_target", return_value=False),
         patch("litellm.acompletion", invalid_json_completion),
     ):
         response = client.post(
@@ -78,7 +78,7 @@ def test_translate_blocks_unsafe_api_base():
     client = _api_client()
     with (
         patch.dict("os.environ", {"ALLOW_SSRF_LOCAL": "false"}, clear=True),
-        patch("pdf_ocr.api.services.ai._complete_text") as completion,
+        patch("local_deepl.api.services.ai._complete_text") as completion,
     ):
         response = client.post(
             "/api/translate",
@@ -106,7 +106,7 @@ def test_translation_status_success_shape():
 
     client = _api_client()
     with (
-        patch("pdf_ocr.api.celery_app.celery_app.AsyncResult", return_value=_Task()),
+        patch("local_deepl.api.celery_app.celery_app.AsyncResult", return_value=_Task()),
     ):
         response = client.get("/api/translate/status/job-1")
 

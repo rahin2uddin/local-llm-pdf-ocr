@@ -22,7 +22,7 @@ import fitz
 import pytest
 from PIL import Image
 
-from pdf_ocr.core.grounded import (
+from local_deepl.core.grounded import (
     GroundedBlock,
     GroundedResponse,
     PromptedGroundedOCR,
@@ -31,9 +31,9 @@ from pdf_ocr.core.grounded import (
     parse_glm_layout_details,
     parse_zai_response,
 )
-from pdf_ocr.core.ocr import LLMCallError, ModelNotLoadedError
-from pdf_ocr.core.pdf import PDFHandler
-from pdf_ocr.pipeline import OCRPipeline
+from local_deepl.core.ocr import LLMCallError, ModelNotLoadedError
+from local_deepl.core.pdf import PDFHandler
+from local_deepl.pipeline import OCRPipeline
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -285,7 +285,7 @@ class TestPromptedGroundedResilience:
     async def test_one_failing_page_does_not_lose_others(self, monkeypatch):
         # Build a fake PromptedGroundedOCR that renders 3 fake pages and makes
         # page 1 fail while pages 0 and 2 succeed.
-        from pdf_ocr.core.grounded import PromptedGroundedOCR
+        from local_deepl.core.grounded import PromptedGroundedOCR
 
         class _FakeClient:
             def __init__(self, *a, **kw):
@@ -336,7 +336,7 @@ class TestPromptedGroundedResilience:
 
                 from openai import AsyncOpenAI
 
-                import pdf_ocr.core.grounded as _g
+                import local_deepl.core.grounded as _g
 
                 page_imgs = [(_tiny_b64(), 100, 100)] * 3
                 client = AsyncOpenAI(

@@ -4,8 +4,8 @@ from datetime import datetime, timezone
 
 import pytest
 
-from pdf_ocr.api.services.jobs import JobHistory
-from pdf_ocr.api.services.progress import (
+from local_deepl.api.services.jobs import JobHistory
+from local_deepl.api.services.progress import (
     ProgressService,
     sanitize_display_client_id,
     stage_to_percent,

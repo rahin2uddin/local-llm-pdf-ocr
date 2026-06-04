@@ -6,12 +6,12 @@ from unittest.mock import patch
 
 import pytest
 
-from pdf_ocr.api.schemas.requests import (
+from local_deepl.api.schemas.requests import (
     ExtractionRequest,
     ExtractionTemplate,
     TranslationRequest,
 )
-from pdf_ocr.api.services import ai
+from local_deepl.api.services import ai
 
 
 def _config() -> dict[str, object]:
@@ -44,7 +44,7 @@ async def test_translate_uses_request_settings_and_builds_prompt():
     )
 
     with (
-        patch("pdf_ocr.api.services.ai.is_ssrf_target", return_value=False),
+        patch("local_deepl.api.services.ai.is_ssrf_target", return_value=False),
         patch("litellm.acompletion", capture_completion),
     ):
         translated = await ai.translate_text(request, config=_config())
@@ -76,7 +76,7 @@ async def test_extract_uses_template_prompt_and_config_defaults():
     )
 
     with (
-        patch("pdf_ocr.api.services.ai.is_ssrf_target", return_value=False),
+        patch("local_deepl.api.services.ai.is_ssrf_target", return_value=False),
         patch("litellm.acompletion", capture_completion),
     ):
         extracted = await ai.extract_structured_data(request, config=_config())
@@ -103,7 +103,7 @@ async def test_extract_invalid_json_returns_empty_object():
     )
 
     with (
-        patch("pdf_ocr.api.services.ai.is_ssrf_target", return_value=False),
+        patch("local_deepl.api.services.ai.is_ssrf_target", return_value=False),
         patch("litellm.acompletion", bad_completion),
     ):
         assert await ai.extract_structured_data(request, config=_config()) == {}
@@ -123,7 +123,7 @@ async def test_ssrf_blocking_is_distinct_and_skips_provider_call():
     request = TranslationRequest(text="hello", api_base="http://127.0.0.1:1234/v1")
 
     with (
-        patch("pdf_ocr.api.services.ai.is_ssrf_target", return_value=True),
+        patch("local_deepl.api.services.ai.is_ssrf_target", return_value=True),
         patch("litellm.acompletion", unexpected_completion),
         pytest.raises(ai.BlockedAPIBaseError) as exc_info,
     ):
@@ -145,7 +145,7 @@ async def test_provider_failure_wraps_without_public_detail_leak():
     )
 
     with (
-        patch("pdf_ocr.api.services.ai.is_ssrf_target", return_value=False),
+        patch("local_deepl.api.services.ai.is_ssrf_target", return_value=False),
         patch("litellm.acompletion", fail_completion),
         pytest.raises(ai.AIProviderError) as exc_info,
     ):

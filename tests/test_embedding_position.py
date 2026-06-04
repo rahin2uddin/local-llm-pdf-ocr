@@ -18,7 +18,7 @@ from pathlib import Path
 import fitz
 import pytest
 
-from pdf_ocr.core.pdf import PDFHandler
+from local_deepl.core.pdf import PDFHandler
 
 
 def _bbox_to_pdf_rect(bbox_norm, page_w: float, page_h: float) -> fitz.Rect:
