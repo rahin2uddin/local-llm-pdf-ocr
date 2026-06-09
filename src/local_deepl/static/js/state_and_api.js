@@ -82,6 +82,9 @@ const refs = {
     dualEngine: document.getElementById('setting-dual-engine'),
     spellcheck: document.getElementById('setting-spellcheck'),
     crossPage: document.getElementById('setting-cross-page'),
+    readingOrder: document.getElementById('setting-reading-order'),
+    qualityAnalysis: document.getElementById('setting-quality-analysis'),
+    structureAnalysis: document.getElementById('setting-structure-analysis'),
     pages: document.getElementById('setting-pages'),
     
     // Upload slots & active file card
@@ -179,7 +182,11 @@ async function loadConfig() {
         if (refs.dualEngine) refs.dualEngine.checked = config.dual_engine === true;
         if (refs.spellcheck) refs.spellcheck.value = config.spellcheck || 'none';
         if (refs.crossPage) refs.crossPage.checked = config.cross_page === true;
-        
+        const documentProcessors = Array.isArray(config.document_processors) ? config.document_processors : [];
+        if (refs.readingOrder) refs.readingOrder.checked = documentProcessors.includes('reading_order');
+        if (refs.qualityAnalysis) refs.qualityAnalysis.checked = documentProcessors.includes('quality_analysis');
+        if (refs.structureAnalysis) refs.structureAnalysis.checked = documentProcessors.includes('structure_analysis');
+
         if (refs.pipelineModes) {
             for (const radio of refs.pipelineModes) {
                 if (radio.value === config.pipeline_mode) {
@@ -192,6 +199,14 @@ async function loadConfig() {
     } catch (e) {
         showToast('Error loading configuration', 'error');
     }
+}
+
+function getSelectedDocumentProcessors() {
+    const processors = [];
+    if (refs.readingOrder?.checked) processors.push('reading_order');
+    if (refs.qualityAnalysis?.checked) processors.push('quality_analysis');
+    if (refs.structureAnalysis?.checked) processors.push('structure_analysis');
+    return processors;
 }
 
 async function saveConfig() {
@@ -211,7 +226,8 @@ async function saveConfig() {
         binarize: refs.binarize ? refs.binarize.checked : false,
         dual_engine: refs.dualEngine ? refs.dualEngine.checked : false,
         spellcheck: refs.spellcheck ? refs.spellcheck.value : 'none',
-        cross_page: refs.crossPage ? refs.crossPage.checked : false
+        cross_page: refs.crossPage ? refs.crossPage.checked : false,
+        document_processors: getSelectedDocumentProcessors()
     };
     
     try {
@@ -232,7 +248,7 @@ function debounceSave() {
 }
 
 // Auto-save listeners
-[refs.apiBase, refs.apiKey, refs.modelSelect, refs.dpi, refs.concurrency, refs.denseMode, refs.maxImageDim, refs.denseThreshold, refs.refine, refs.selfCorrection, refs.binarize, refs.dualEngine, refs.spellcheck, refs.crossPage].forEach(el => {
+[refs.apiBase, refs.apiKey, refs.modelSelect, refs.dpi, refs.concurrency, refs.denseMode, refs.maxImageDim, refs.denseThreshold, refs.refine, refs.selfCorrection, refs.binarize, refs.dualEngine, refs.spellcheck, refs.crossPage, refs.readingOrder, refs.qualityAnalysis, refs.structureAnalysis].forEach(el => {
     if (!el) return;
     el.addEventListener('change', debounceSave);
     el.addEventListener('input', debounceSave);
@@ -321,6 +337,7 @@ function getFormSettings() {
         dual_engine: refs.dualEngine ? (refs.dualEngine.checked ? 'true' : 'false') : 'false',
         spellcheck: refs.spellcheck ? refs.spellcheck.value : 'none',
         cross_page: refs.crossPage ? (refs.crossPage.checked ? 'true' : 'false') : 'false',
+        document_processors: getSelectedDocumentProcessors().join(','),
         pages: refs.pages ? refs.pages.value.trim() : ''
     };
 }

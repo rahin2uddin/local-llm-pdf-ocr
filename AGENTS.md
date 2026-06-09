@@ -39,14 +39,15 @@ uv run mypy src
 - Keep bboxes normalized as `[x0, y0, x1, y1]` in `0..1` until `PDFHandler.embed_structured_text`.
 - Treat image inputs as first-class inputs. PDF and image paths share the output writer.
 - Keep CLI and web capabilities distinct: advanced enhancement settings are wired through the web router and `OCRPipeline`, but not exposed as CLI flags.
+- Keep local document processors selectable through web/API `document_processors`. Current names are `reading_order`, `quality_analysis`, and `structure_analysis`; defaults run no processors.
 
 ## Pipeline Paths
 
 ```text
 PDF/image -> pages -> Surya detection -> sparse: full-page OCR -> DP alignment -> refine --+
-                                    \-> dense: per-box OCR -------------------------------+-> post-process -> searchable PDF
+                                    \-> dense: per-box OCR -------------------------------+-> post-process -> DocumentResult -> optional processors -> searchable PDF
 
-PDF/image -> grounded bbox-native VLM -> post-process -> searchable PDF
+PDF/image -> grounded bbox-native VLM -> post-process -> DocumentResult -> optional processors -> searchable PDF
 ```
 
 - Hybrid is the default: Surya detection, VLM OCR, DP alignment, optional refine, optional post-processing, embed.
@@ -60,6 +61,8 @@ PDF/image -> grounded bbox-native VLM -> post-process -> searchable PDF
 | `src/local_deepl/cli.py` | CLI parser and Rich progress output |
 | `src/local_deepl/server.py` | FastAPI application and server entry point |
 | `src/local_deepl/pipeline.py` | Shared hybrid and grounded orchestration |
+| `src/local_deepl/core/document.py` | Normalized DocumentResult IR and legacy pages-data adapter |
+| `src/local_deepl/core/processors.py` | Local deterministic document processors and user-facing processor builder |
 | `src/local_deepl/core/aligner.py` | Surya detection and DP alignment |
 | `src/local_deepl/core/ocr.py` | LiteLLM OCR calls, prompts, limits, and filters |
 | `src/local_deepl/core/pdf.py` | PDF/image conversion and sandwich-PDF embedding |

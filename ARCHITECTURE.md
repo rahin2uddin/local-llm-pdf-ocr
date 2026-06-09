@@ -11,9 +11,9 @@ invisible text layer.
 
 ```text
 PDF/image -> raster pages -> Surya detection -> sparse: full-page VLM OCR -> DP alignment --+
-                                      \-> dense: per-box VLM OCR ---------------------------+-> optional refine -> optional post-process -> searchable PDF
+                                      \-> dense: per-box VLM OCR ---------------------------+-> optional refine -> optional post-process -> DocumentResult -> optional document processors -> searchable PDF
 
-PDF/image -> grounded bbox-native VLM OCR -> optional post-process -> searchable PDF
+PDF/image -> grounded bbox-native VLM OCR -> optional post-process -> DocumentResult -> optional document processors -> searchable PDF
 ```
 
 ## Directory Responsibilities
@@ -24,6 +24,8 @@ PDF/image -> grounded bbox-native VLM OCR -> optional post-process -> searchable
 | `src/local_deepl/cli.py` | CLI arguments, runtime wiring, and Rich progress output |
 | `src/local_deepl/server.py` | Lazy optional-web dependency loading, FastAPI application setup, and server entry point |
 | `src/local_deepl/pipeline.py` | Shared hybrid and grounded OCR orchestration |
+| `src/local_deepl/core/document.py` | Normalized `DocumentResult` IR, pages, blocks, spans, text aggregation, and legacy pages-data adapter |
+| `src/local_deepl/core/processors.py` | Local deterministic document processor protocol, registry, reading-order processor, quality-analysis processor, and user-facing processor builder |
 | `src/local_deepl/core/aligner.py` | Surya detection and DP text-to-box alignment |
 | `src/local_deepl/core/ocr.py` | OpenAI-compatible VLM calls, prompts, limits, and OCR response filters |
 | `src/local_deepl/core/pdf.py` | PDF/image conversion and searchable PDF embedding |
@@ -48,9 +50,15 @@ PDF/image -> grounded bbox-native VLM OCR -> optional post-process -> searchable
 ## Extension Points
 
 `OCRPipeline` accepts injected `aligner`, `ocr_processor`, `pdf_handler`,
-`output_writer`, and `grounded_backend` components. Keep PDF and image inputs
-on the same output-writer path, and keep normalized bboxes in `[x0, y0, x1, y1]`
-form until embedding.
+`output_writer`, `grounded_backend`, and `document_processors` components. Keep
+PDF and image inputs on the same output-writer path, and keep normalized bboxes
+in `[x0, y0, x1, y1]` form until embedding.
+
+Document processors receive a mutable `DocumentResult` after OCR cleanup,
+spellcheck, and cross-page merge but before PDF embedding. The web/API surface
+can select built-in local processors by name through `document_processors`.
+Current built-ins are `reading_order`, `quality_analysis`, and
+`structure_analysis`.
 
 ## Performance Notes
 
@@ -60,6 +68,27 @@ form until embedding.
   images before producing the final thumbnail JPEG.
 
 ## Change Blueprint
+
+### 2026-06-09: Local document processors exposed to web/API
+
+| File | Responsibility |
+| --- | --- |
+| `src/local_deepl/core/document.py` | Provide the normalized `DocumentResult` handoff used by post-OCR document processors |
+| `src/local_deepl/core/processors.py` | Define built-in local processors and map user-facing names to deterministic processor instances |
+| `src/local_deepl/api/schemas/requests.py` | Validate `document_processors` for config JSON and multipart OCR requests |
+| `src/local_deepl/api/routers/ocr.py` | Instantiate selected processors, pass them into `OCRPipeline`, and expose quality metadata through `X-Document-Quality` when available |
+| `src/local_deepl/static/js/state_and_api.js` | Persist and submit web-selected document processors |
+| `src/local_deepl/static/index.html` | Expose Reading Order, Quality Analysis, and Structure Analysis toggles in Advanced Configuration |
+| `tests/test_document_processor_selection.py` | Cover processor selection parsing, validation, and factory mapping |
+
+### 2026-06-09: Stage 2 local structure analysis processor
+
+| File | Responsibility |
+| --- | --- |
+| `src/local_deepl/core/processors.py` | Add `structure_analysis`, a deterministic local processor that classifies blocks as headings, paragraphs, list items, key-values, table candidates, or empty blocks |
+| `src/local_deepl/api/routers/ocr.py` | Expose page-level structure summaries through `X-Document-Structure` when structure metadata is present |
+| `src/local_deepl/static/index.html` | Add the Structure Analysis opt-in control |
+| `tests/test_document.py` | Cover block classification without rewriting output text |
 
 ### 2026-06-02: Direct grounded PDF pixmap conversion
 

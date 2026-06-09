@@ -49,26 +49,38 @@ class HybridAligner:
 
         images = [Image.open(io.BytesIO(b)).convert("RGB") for b in images_bytes_list]
         sizes = [img.size for img in images]
-        predictions = self.detection_predictor(images)
 
-        all_boxes: list[list[BBox]] = []
-        for (img_w, img_h), pred in zip(sizes, predictions, strict=False):
-            boxes: list[BBox] = []
-            for bbox in pred.bboxes or []:
-                x0, y0, x1, y1 = bbox.bbox
-                boxes.append(
-                    [
-                        _clamp(x0 / img_w),
-                        _clamp(y0 / img_h),
-                        _clamp(x1 / img_w),
-                        _clamp(y1 / img_h),
-                    ]
-                )
-            # Stable row-major default. The actual reading-order choice for
-            # the DP happens inside align_text, which tries both row-major
-            # and column-major orderings and picks the lower-cost result.
-            boxes.sort(key=lambda b: (b[1], b[0]))
-            all_boxes.append(boxes)
+        def run_detection() -> list[list[BBox]]:
+            predictions = self.detection_predictor(images)
+            all_boxes: list[list[BBox]] = []
+            for (img_w, img_h), pred in zip(sizes, predictions, strict=False):
+                boxes: list[BBox] = []
+                for bbox in pred.bboxes or []:
+                    x0, y0, x1, y1 = bbox.bbox
+                    boxes.append(
+                        [
+                            _clamp(x0 / img_w),
+                            _clamp(y0 / img_h),
+                            _clamp(x1 / img_w),
+                            _clamp(y1 / img_h),
+                        ]
+                    )
+                # Stable row-major default. The actual reading-order choice for
+                # the DP happens inside align_text, which tries both row-major
+                # and column-major orderings and picks the lower-cost result.
+                boxes.sort(key=lambda b: (b[1], b[0]))
+                all_boxes.append(boxes)
+            return all_boxes
+
+        all_boxes = run_detection()
+        # Surya can occasionally return an entirely empty batch immediately
+        # after predictor initialization on local backends. Retry only when every
+        # page is empty; a real blank page inside a mixed batch must stay blank.
+        for _ in range(3):
+            if any(all_boxes):
+                break
+            self.detection_predictor = DetectionPredictor()
+            all_boxes = run_detection()
         return all_boxes
 
     def align_text(

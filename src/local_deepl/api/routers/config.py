@@ -61,6 +61,7 @@ _config: dict = {
     "dual_engine": _env_bool("OCR_DUAL_ENGINE", False),
     "spellcheck": os.getenv("OCR_SPELLCHECK", "none"),
     "cross_page": _env_bool("OCR_CROSS_PAGE", False),
+    "document_processors": [],
 }
 
 

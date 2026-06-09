@@ -19,6 +19,7 @@ from local_deepl import (
     OCRProcessor,
     PDFHandler,
     PromptedGroundedOCR,
+    build_document_processors,
 )
 from local_deepl.api.schemas import (
     ExportDocxRequest,
@@ -82,6 +83,38 @@ def _extract_bearer_token(authorization: str | None) -> str | None:
     if scheme.lower() != "bearer" or not token.strip():
         return None
     return token.strip()
+
+
+def _document_quality_header(pipeline: OCRPipeline) -> str | None:
+    document = getattr(pipeline, "last_document_result", None)
+    if document is None:
+        return None
+
+    pages = []
+    for page in document.pages:
+        quality = page.metadata.get("quality")
+        if isinstance(quality, dict):
+            pages.append({"page_index": page.page_index, "quality": quality})
+
+    if not pages:
+        return None
+    return json.dumps({"pages": pages}, separators=(",", ":"), sort_keys=True)
+
+
+def _document_structure_header(pipeline: OCRPipeline) -> str | None:
+    document = getattr(pipeline, "last_document_result", None)
+    if document is None:
+        return None
+
+    pages = []
+    for page in document.pages:
+        structure = page.metadata.get("structure")
+        if isinstance(structure, dict):
+            pages.append({"page_index": page.page_index, "structure": structure})
+
+    if not pages:
+        return None
+    return json.dumps({"pages": pages}, separators=(",", ":"), sort_keys=True)
 
 
 def _path_exists(path: str) -> bool:
@@ -159,6 +192,7 @@ async def process_pdf(
     dual_engine: str | None = Form(None),
     spellcheck: str | None = Form(None),
     cross_page: str | None = Form(None),
+    document_processors: str | None = Form(None),
 ):
     """
     Process a PDF or image file through the OCR pipeline.
@@ -203,6 +237,9 @@ async def process_pdf(
                 "cross_page": cross_page
                 if cross_page is not None
                 else _config["cross_page"],
+                "document_processors": document_processors
+                if document_processors is not None
+                else _config["document_processors"],
             }
         )
     except ValidationError as exc:
@@ -231,6 +268,9 @@ async def process_pdf(
         await manager.send_progress(progress_target, "Initializing...", 5, stage="init")
 
         # -- Build the pipeline based on the selected mode -------------------
+        processors = build_document_processors(
+            processor.value for processor in settings.document_processors
+        )
         backend: Any
         if settings.pipeline_mode == "grounded":
             backend = PromptedGroundedOCR(
@@ -249,6 +289,7 @@ async def process_pdf(
                 ),
                 pdf_handler=PDFHandler(),
                 grounded_backend=backend,
+                document_processors=processors,
             )
         else:
             # Default: hybrid mode
@@ -257,11 +298,12 @@ async def process_pdf(
                 api_key=settings.api_key,
                 model=settings.model,
             )
-            pipeline = OCRPipeline(
-                aligner=HybridAligner(),
-                ocr_processor=backend,
-                pdf_handler=PDFHandler(),
-            )
+        pipeline = OCRPipeline(
+            aligner=HybridAligner(),
+            ocr_processor=backend,
+            pdf_handler=PDFHandler(),
+            document_processors=processors,
+        )
 
         # Verify model
         verify = _config.get("verify_model", True)
@@ -346,6 +388,12 @@ async def process_pdf(
         )
         response.headers["X-Text-Artifact-Id"] = artifact_handle.artifact_id
         response.headers["X-Text-Artifact-Token"] = artifact_handle.token
+        quality_header = _document_quality_header(pipeline)
+        if quality_header is not None:
+            response.headers["X-Document-Quality"] = quality_header
+        structure_header = _document_structure_header(pipeline)
+        if structure_header is not None:
+            response.headers["X-Document-Structure"] = structure_header
         return response
 
     except ValueError as ve:

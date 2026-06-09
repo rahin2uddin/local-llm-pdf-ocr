@@ -27,6 +27,12 @@ class SpellcheckMode(StrEnum):
     FR = "fr"
 
 
+class DocumentProcessorName(StrEnum):
+    READING_ORDER = "reading_order"
+    QUALITY_ANALYSIS = "quality_analysis"
+    STRUCTURE_ANALYSIS = "structure_analysis"
+
+
 class ExtractionTemplate(StrEnum):
     INVOICE = "invoice"
     RESUME = "resume"
@@ -63,6 +69,16 @@ def _non_empty_string(value: Any) -> Any:
     return value.strip()
 
 
+def _parse_document_processors(value: Any) -> Any:
+    if value is None:
+        return value
+    if isinstance(value, str):
+        if not value.strip():
+            return []
+        return [item.strip() for item in value.split(",") if item.strip()]
+    return value
+
+
 class ConfigUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -82,6 +98,7 @@ class ConfigUpdate(BaseModel):
     dual_engine: bool | None = None
     spellcheck: SpellcheckMode | None = None
     cross_page: bool | None = None
+    document_processors: list[DocumentProcessorName] | None = None
 
     @field_validator("api_base", "api_key", "model", mode="before")
     @classmethod
@@ -118,6 +135,11 @@ class ConfigUpdate(BaseModel):
             return value
         return _reject_string_for_config_bool(value)
 
+    @field_validator("document_processors", mode="before")
+    @classmethod
+    def validate_document_processors(cls, value: Any) -> Any:
+        return _parse_document_processors(value)
+
 
 class ProcessSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -138,6 +160,7 @@ class ProcessSettings(BaseModel):
     dual_engine: bool
     spellcheck: SpellcheckMode
     cross_page: bool
+    document_processors: list[DocumentProcessorName] = Field(default_factory=list)
 
     @field_validator("api_base", "api_key", "model", mode="before")
     @classmethod
@@ -159,6 +182,11 @@ class ProcessSettings(BaseModel):
         if not isinstance(value, str) or not _PAGE_RANGE_RE.match(value):
             raise ValueError("must be a comma-separated page range such as 1-3,5")
         return value.strip()
+
+    @field_validator("document_processors", mode="before")
+    @classmethod
+    def validate_document_processors(cls, value: Any) -> Any:
+        return _parse_document_processors(value)
 
 
 class TranslationRequest(BaseModel):

@@ -28,11 +28,13 @@ import asyncio
 import base64
 import io
 from collections import defaultdict
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 
 from PIL import Image
 
+from local_deepl.core.document import DocumentResult
 from local_deepl.core.grounded import GroundedOCRBackend
+from local_deepl.core.processors import DocumentProcessor, run_document_processors
 from local_deepl.utils.image import crop_for_ocr_from_image
 
 ProgressCallback = Callable[[str, int, int, str], Awaitable[None]]
@@ -70,6 +72,7 @@ class OCRPipeline:
         pdf_handler=None,
         output_writer: OutputWriter | None = None,
         grounded_backend: GroundedOCRBackend | None = None,
+        document_processors: Sequence[DocumentProcessor] | None = None,
     ):
         """
         When `grounded_backend` is provided, `run()` skips Surya detection,
@@ -84,6 +87,10 @@ class OCRPipeline:
         if pdf_handler is None:
             raise ValueError("pdf_handler is required (used for output writing)")
         self.output_writer = output_writer or pdf_handler.embed_structured_text
+        # Exposed for web extraction/export flows that need the richer document
+        # graph after the legacy pages-data payload has been produced.
+        self.last_document_result: DocumentResult | None = None
+        self.document_processors = tuple(document_processors or ())
 
     async def run(
         self,
@@ -295,6 +302,17 @@ class OCRPipeline:
         if spellcheck and spellcheck != "none":
             await self._run_spellcheck(pages_structured, page_nums, spellcheck)
 
+        # Processors intentionally run after OCR cleanup and before embedding:
+        # their text/order mutations become the searchable PDF text layer.
+        document_result = DocumentResult.from_pages_data(
+            pages_structured, source_path=input_path, source_processor="hybrid"
+        )
+        self.last_document_result = await run_document_processors(
+            document_result, self.document_processors
+        )
+        pages_structured = self.last_document_result.to_pages_data()
+        page_nums = sorted(pages_structured)
+
         # Update pages_text to reflect all Phase 3 & 4 post-processing (refine, spellcheck, cross-page merge)
         for p in page_nums:
             pages_text[p] = [text for _, text in pages_structured[p] if text.strip()]
@@ -333,7 +351,7 @@ class OCRPipeline:
             input_path, progress=progress
         )
 
-        pages_data: dict[int, list] = defaultdict(list)
+        pages_data: dict[int, list[tuple[list[float], str]]] = defaultdict(list)
         for block in response.blocks:
             pages_data[block.page_index].append((block.bbox, block.text))
 
@@ -344,6 +362,17 @@ class OCRPipeline:
 
         if spellcheck and spellcheck != "none":
             await self._run_spellcheck(pages_data, page_nums, spellcheck)
+
+        # Grounded OCR rejoins the same processor chain as hybrid so export and
+        # quality features do not need backend-specific document handling.
+        document_result = DocumentResult.from_pages_data(
+            dict(pages_data), source_path=input_path, source_processor="grounded"
+        )
+        self.last_document_result = await run_document_processors(
+            document_result, self.document_processors
+        )
+        pages_data = defaultdict(list, self.last_document_result.to_pages_data())
+        page_nums = sorted(pages_data)
 
         pages_text: dict[int, list[str]] = defaultdict(list)
         for p in page_nums:
