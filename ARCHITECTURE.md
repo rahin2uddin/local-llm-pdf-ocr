@@ -38,6 +38,7 @@ PDF/image -> grounded bbox-native VLM OCR -> optional post-process -> DocumentRe
 | `src/local_deepl/api/routers/config.py` | Runtime configuration and model discovery |
 | `src/local_deepl/api/routers/websocket.py` | Token-bound WebSocket progress transport and progress session issuance |
 | `src/local_deepl/api/schemas/` | Typed FastAPI boundary schemas for runtime configuration, OCR form settings, translation, and extraction requests |
+| `src/local_deepl/api/services/document_metadata.py` | Compact JSON report builder and atomic writer for token-bound `DocumentResult` metadata artifacts |
 | `src/local_deepl/api/services/security.py` | API upload validation, stable error constants, temporary-file cleanup, and opaque text artifact IDs |
 | `src/local_deepl/api/tasks.py` | Optional Celery translation task execution |
 | `src/local_deepl/utils/image.py` | Image crop, blank-region detection, and crop encoding helpers |
@@ -58,7 +59,7 @@ Document processors receive a mutable `DocumentResult` after OCR cleanup,
 spellcheck, and cross-page merge but before PDF embedding. The web/API surface
 can select built-in local processors by name through `document_processors`.
 Current built-ins are `reading_order`, `quality_analysis`, and
-`structure_analysis`.
+`structure_analysis`, and `section_analysis`.
 
 ## Performance Notes
 
@@ -78,7 +79,7 @@ Current built-ins are `reading_order`, `quality_analysis`, and
 | `src/local_deepl/api/schemas/requests.py` | Validate `document_processors` for config JSON and multipart OCR requests |
 | `src/local_deepl/api/routers/ocr.py` | Instantiate selected processors, pass them into `OCRPipeline`, and expose quality metadata through `X-Document-Quality` when available |
 | `src/local_deepl/static/js/state_and_api.js` | Persist and submit web-selected document processors |
-| `src/local_deepl/static/index.html` | Expose Reading Order, Quality Analysis, and Structure Analysis toggles in Advanced Configuration |
+| `src/local_deepl/static/index.html` | Expose Reading Order, Quality Analysis, Structure Analysis, and Section Analysis toggles in Advanced Configuration |
 | `tests/test_document_processor_selection.py` | Cover processor selection parsing, validation, and factory mapping |
 
 ### 2026-06-09: Stage 2 local structure analysis processor
@@ -89,6 +90,23 @@ Current built-ins are `reading_order`, `quality_analysis`, and
 | `src/local_deepl/api/routers/ocr.py` | Expose page-level structure summaries through `X-Document-Structure` when structure metadata is present |
 | `src/local_deepl/static/index.html` | Add the Structure Analysis opt-in control |
 | `tests/test_document.py` | Cover block classification without rewriting output text |
+
+### 2026-06-09: Stage 3 local section analysis processor
+
+| File | Responsibility |
+| --- | --- |
+| `src/local_deepl/core/processors.py` | Add `section_analysis`, a deterministic local processor that assigns blocks to detected heading sections across page boundaries |
+| `src/local_deepl/api/routers/ocr.py` | Expose page-level section summaries through `X-Document-Sections` when section metadata is present |
+| `src/local_deepl/static/index.html` | Add the Section Analysis opt-in control |
+| `tests/test_document.py` | Cover section grouping while preserving original block text |
+
+### 2026-06-09: Stage 4 document metadata artifact surface
+
+| File | Responsibility |
+| --- | --- |
+| `src/local_deepl/api/services/document_metadata.py` | Build compact JSON-safe metadata reports from `DocumentResult` page/block processor annotations and write them atomically as temporary artifacts |
+| `src/local_deepl/api/routers/ocr.py` | Issue `X-Document-Metadata-Artifact-Id` and `X-Document-Metadata-Artifact-Token` only when report content exists, and serve protected `GET /metadata/{artifact_id}` |
+| `tests/test_api_safety.py` | Cover token-bound metadata artifact access and payload shape without changing text artifact behavior |
 
 ### 2026-06-02: Direct grounded PDF pixmap conversion
 

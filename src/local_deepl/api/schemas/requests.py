@@ -31,6 +31,7 @@ class DocumentProcessorName(StrEnum):
     READING_ORDER = "reading_order"
     QUALITY_ANALYSIS = "quality_analysis"
     STRUCTURE_ANALYSIS = "structure_analysis"
+    SECTION_ANALYSIS = "section_analysis"
 
 
 class ExtractionTemplate(StrEnum):

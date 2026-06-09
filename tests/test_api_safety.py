@@ -21,6 +21,7 @@ from local_deepl.api.services.security import (
     UploadValidationError,
     save_validated_upload,
 )
+from local_deepl.core.document import DocumentResult
 from local_deepl.utils.security import is_ssrf_target
 
 
@@ -222,6 +223,140 @@ def test_text_artifact_retrieval_expires_router_store(tmp_path):
         assert not Path(handle.path).exists()
     finally:
         ocr._text_artifacts = original_store
+
+
+def test_process_omits_document_metadata_artifact_when_no_report(tmp_path: Path):
+    class DummyPipeline:
+        def __init__(self, *args, **kwargs):
+            self.last_document_result = None
+
+        async def process_file(self, input_path, output_path, **kwargs):
+            Path(output_path).write_bytes(b"%PDF-1.4\n%%EOF\n")
+            return {0: ["safe text"]}
+
+    original_text_store = ocr._text_artifacts
+    original_metadata_store = ocr._metadata_artifacts
+    ocr._text_artifacts = TextArtifactStore(artifact_dir=tmp_path / "text")
+    ocr._metadata_artifacts = TextArtifactStore(artifact_dir=tmp_path / "metadata")
+
+    try:
+        client = _api_client()
+        with (
+            patch(
+                "local_deepl.utils.security.socket.getaddrinfo",
+                side_effect=_public_dns,
+            ),
+            patch("local_deepl.api.routers.ocr.OCRPipeline", DummyPipeline),
+            patch("local_deepl.api.routers.ocr.HybridAligner"),
+            patch("local_deepl.api.routers.ocr.PDFHandler"),
+        ):
+            response = client.post(
+                "/process", data=_process_form(), files={"file": _pdf_upload()}
+            )
+
+        assert response.status_code == 200
+        assert "X-Text-Artifact-Id" in response.headers
+        assert "X-Document-Metadata-Artifact-Id" not in response.headers
+        assert "X-Document-Metadata-Artifact-Token" not in response.headers
+    finally:
+        ocr._text_artifacts = original_text_store
+        ocr._metadata_artifacts = original_metadata_store
+
+
+def test_process_exposes_token_bound_document_metadata_artifact(tmp_path: Path):
+    class DummyPipeline:
+        def __init__(self, *args, **kwargs):
+            self.last_document_result = None
+
+        async def process_file(self, input_path, output_path, **kwargs):
+            Path(output_path).write_bytes(b"%PDF-1.4\n%%EOF\n")
+            document = DocumentResult.from_pages_data(
+                {0: [([0.1, 0.1, 0.4, 0.2], "Invoice")]}
+            )
+            page = document.pages[0]
+            block = page.blocks[0]
+            block.reading_order = 0
+            block.kind = "heading"
+            block.metadata["structure"] = {
+                "kind": "heading",
+                "confidence": 0.9,
+                "signals": ["test_heading"],
+            }
+            block.metadata["section"] = {
+                "section_index": 0,
+                "title": "Invoice",
+                "heading_page_index": 0,
+                "heading_block_index": 0,
+            }
+            page.metadata["quality"] = {
+                "block_count": 1,
+                "text_char_count": 7,
+                "text_density": 70.0,
+                "findings": [],
+            }
+            page.metadata["structure"] = {
+                "block_kinds": {"heading": 1},
+                "has_key_values": False,
+                "has_tables": False,
+            }
+            page.metadata["sections"] = {
+                "section_count": 1,
+                "active_section": "Invoice",
+                "headings": [block.metadata["section"]],
+            }
+            self.last_document_result = document
+            return {0: ["safe text"]}
+
+    original_text_store = ocr._text_artifacts
+    original_metadata_store = ocr._metadata_artifacts
+    ocr._text_artifacts = TextArtifactStore(artifact_dir=tmp_path / "text")
+    ocr._metadata_artifacts = TextArtifactStore(artifact_dir=tmp_path / "metadata")
+
+    try:
+        client = _api_client()
+        with (
+            patch(
+                "local_deepl.utils.security.socket.getaddrinfo",
+                side_effect=_public_dns,
+            ),
+            patch("local_deepl.api.routers.ocr.OCRPipeline", DummyPipeline),
+            patch("local_deepl.api.routers.ocr.HybridAligner"),
+            patch("local_deepl.api.routers.ocr.PDFHandler"),
+        ):
+            response = client.post(
+                "/process", data=_process_form(), files={"file": _pdf_upload()}
+            )
+
+        assert response.status_code == 200
+        artifact_id = response.headers["X-Document-Metadata-Artifact-Id"]
+        token = response.headers["X-Document-Metadata-Artifact-Token"]
+
+        denied = client.get(
+            f"/metadata/{artifact_id}",
+            headers={"Authorization": "Bearer wrong"},
+        )
+        assert denied.status_code == 403
+
+        metadata_response = client.get(
+            f"/metadata/{artifact_id}", headers={"Authorization": f"Bearer {token}"}
+        )
+        assert metadata_response.status_code == 200
+        payload = metadata_response.json()
+
+        assert payload["summary"]["processors"] == [
+            "quality_analysis",
+            "reading_order",
+            "section_analysis",
+            "structure_analysis",
+        ]
+        assert payload["pages"][0]["metadata"]["quality"]["block_count"] == 1
+        block_report = payload["pages"][0]["blocks"][0]
+        assert block_report["reading_order"] == 0
+        assert block_report["metadata"]["structure"]["kind"] == "heading"
+        assert "text" not in block_report
+    finally:
+        ocr._text_artifacts = original_text_store
+        ocr._metadata_artifacts = original_metadata_store
 
 
 def test_progress_session_uses_token_bound_websocket_channels():

@@ -39,7 +39,7 @@ uv run mypy src
 - Keep bboxes normalized as `[x0, y0, x1, y1]` in `0..1` until `PDFHandler.embed_structured_text`.
 - Treat image inputs as first-class inputs. PDF and image paths share the output writer.
 - Keep CLI and web capabilities distinct: advanced enhancement settings are wired through the web router and `OCRPipeline`, but not exposed as CLI flags.
-- Keep local document processors selectable through web/API `document_processors`. Current names are `reading_order`, `quality_analysis`, and `structure_analysis`; defaults run no processors.
+- Keep local document processors selectable through web/API `document_processors`. Current names are `reading_order`, `quality_analysis`, `structure_analysis`, and `section_analysis`; defaults run no processors.
 
 ## Pipeline Paths
 
@@ -72,6 +72,7 @@ PDF/image -> grounded bbox-native VLM -> post-process -> DocumentResult -> optio
 | `src/local_deepl/core/translation.py` | Optional LangGraph translation workflow |
 | `src/local_deepl/resources/dictionaries/` | Packaged spellcheck dictionaries |
 | `src/local_deepl/api/routers/ocr.py` | OCR, translation, extraction, and job routes |
+| `src/local_deepl/api/services/document_metadata.py` | Token-bound metadata report artifacts for optional document processor outputs |
 | `src/local_deepl/api/routers/config.py` | Runtime configuration and model discovery |
 | `src/local_deepl/utils/security.py` | SSRF target validation |
 | `src/local_deepl/utils/litellm_provider.py` | LiteLLM provider selection |

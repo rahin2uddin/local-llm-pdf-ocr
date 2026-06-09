@@ -9,6 +9,7 @@ from local_deepl.core.processors import (
     DocumentProcessorRegistry,
     QualityAnalysisProcessor,
     ReadingOrderProcessor,
+    SectionAnalysisProcessor,
     StructureAnalysisProcessor,
     run_document_processors,
 )
@@ -153,6 +154,52 @@ async def test_structure_analysis_processor_classifies_blocks_without_rewriting_
         "has_tables": True,
     }
     assert page.blocks[0].metadata["structure"]["signals"] == ["short_prominent_text"]
+
+
+async def test_section_analysis_processor_groups_blocks_under_headings():
+    result = DocumentResult.from_pages_data(
+        {
+            0: [
+                ([0.1, 0.05, 0.6, 0.1], "Prepared for internal review."),
+                ([0.1, 0.15, 0.5, 0.2], "Overview"),
+                ([0.1, 0.22, 0.8, 0.3], "This section describes the document."),
+                ([0.1, 0.36, 0.5, 0.41], "Financial Details"),
+            ],
+            1: [
+                ([0.1, 0.1, 0.8, 0.16], "Revenue increased this quarter."),
+            ],
+        }
+    )
+
+    analyzed = await SectionAnalysisProcessor().process(result)
+
+    first_page = analyzed.pages[0]
+    second_page = analyzed.pages[1]
+    assert [block.text for block in first_page.blocks] == [
+        "Prepared for internal review.",
+        "Overview",
+        "This section describes the document.",
+        "Financial Details",
+    ]
+    assert first_page.blocks[0].metadata["section"]["role"] == "unsectioned"
+    assert first_page.blocks[1].metadata["section"] == {
+        "section_index": 0,
+        "title": "Overview",
+        "heading_page_index": 0,
+        "heading_block_index": 1,
+        "role": "heading",
+    }
+    assert first_page.blocks[2].metadata["section"]["title"] == "Overview"
+    assert first_page.blocks[2].metadata["section"]["role"] == "body"
+    assert first_page.blocks[3].metadata["section"]["title"] == "Financial Details"
+    assert second_page.blocks[0].metadata["section"]["title"] == "Financial Details"
+    assert second_page.blocks[0].metadata["section"]["heading_page_index"] == 0
+    assert first_page.metadata["sections"]["section_count"] == 2
+    assert second_page.metadata["sections"] == {
+        "headings": [],
+        "section_count": 0,
+        "active_section": "Financial Details",
+    }
 
 
 async def test_pipeline_reading_order_processor_feeds_output_writer():

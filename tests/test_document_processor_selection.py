@@ -7,6 +7,7 @@ from local_deepl.api.schemas import ConfigUpdate, ProcessSettings
 from local_deepl.core.processors import (
     QualityAnalysisProcessor,
     ReadingOrderProcessor,
+    SectionAnalysisProcessor,
     StructureAnalysisProcessor,
     build_document_processors,
 )
@@ -37,13 +38,16 @@ def _process_settings(**overrides):
 
 def test_process_settings_accepts_comma_separated_document_processors():
     settings = _process_settings(
-        document_processors="reading_order, quality_analysis, structure_analysis"
+        document_processors=(
+            "reading_order, quality_analysis, structure_analysis, section_analysis"
+        )
     )
 
     assert [name.value for name in settings.document_processors] == [
         "reading_order",
         "quality_analysis",
         "structure_analysis",
+        "section_analysis",
     ]
 
 
@@ -62,9 +66,15 @@ def test_process_settings_rejects_unknown_document_processor():
 
 def test_build_document_processors_maps_allowed_names():
     processors = build_document_processors(
-        ["reading_order", "quality_analysis", "structure_analysis"]
+        [
+            "reading_order",
+            "quality_analysis",
+            "structure_analysis",
+            "section_analysis",
+        ]
     )
 
     assert isinstance(processors[0], ReadingOrderProcessor)
     assert isinstance(processors[1], QualityAnalysisProcessor)
     assert isinstance(processors[2], StructureAnalysisProcessor)
+    assert isinstance(processors[3], SectionAnalysisProcessor)

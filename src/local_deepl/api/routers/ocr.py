@@ -32,7 +32,12 @@ from local_deepl.api.services.artifacts import (
     ArtifactNotFoundError,
     InvalidArtifactReferenceError,
     PageText,
+    TextArtifactHandle,
     TextArtifactStore,
+)
+from local_deepl.api.services.document_metadata import (
+    build_document_metadata_report,
+    write_document_metadata_atomic,
 )
 from local_deepl.api.services.jobs import JobHistory, JobStatus
 from local_deepl.api.services.progress import ProgressService
@@ -52,6 +57,7 @@ from .websocket import manager
 router = APIRouter()
 logger = logging.getLogger(__name__)
 _text_artifacts = TextArtifactStore()
+_metadata_artifacts = TextArtifactStore()
 _job_history = JobHistory()
 _progress_service = ProgressService()
 
@@ -115,6 +121,42 @@ def _document_structure_header(pipeline: OCRPipeline) -> str | None:
     if not pages:
         return None
     return json.dumps({"pages": pages}, separators=(",", ":"), sort_keys=True)
+
+
+def _document_sections_header(pipeline: OCRPipeline) -> str | None:
+    document = getattr(pipeline, "last_document_result", None)
+    if document is None:
+        return None
+
+    pages = []
+    for page in document.pages:
+        sections = page.metadata.get("sections")
+        if isinstance(sections, dict):
+            pages.append({"page_index": page.page_index, "sections": sections})
+
+    if not pages:
+        return None
+    return json.dumps({"pages": pages}, separators=(",", ":"), sort_keys=True)
+
+
+async def _create_document_metadata_artifact(
+    pipeline: OCRPipeline,
+) -> TextArtifactHandle | None:
+    report = build_document_metadata_report(
+        getattr(pipeline, "last_document_result", None)
+    )
+    if report is None:
+        return None
+
+    artifact_id = _metadata_artifacts.issue_id()
+    token = _metadata_artifacts.issue_token()
+    path = await asyncio.to_thread(
+        write_document_metadata_atomic,
+        report,
+        directory=_metadata_artifacts.artifact_dir,
+        artifact_id=artifact_id,
+    )
+    return _metadata_artifacts.put(artifact_id=artifact_id, token=token, path=path)
 
 
 def _path_exists(path: str) -> bool:
@@ -363,6 +405,7 @@ async def process_pdf(
             _text_artifacts.create, cast(PageText, pages_text)
         )
         text_path = artifact_handle.path
+        metadata_handle = await _create_document_metadata_artifact(pipeline)
         job_id = artifact_handle.artifact_id
 
         duration_s = time.monotonic() - t_start
@@ -388,12 +431,22 @@ async def process_pdf(
         )
         response.headers["X-Text-Artifact-Id"] = artifact_handle.artifact_id
         response.headers["X-Text-Artifact-Token"] = artifact_handle.token
+        if metadata_handle is not None:
+            response.headers["X-Document-Metadata-Artifact-Id"] = (
+                metadata_handle.artifact_id
+            )
+            response.headers["X-Document-Metadata-Artifact-Token"] = (
+                metadata_handle.token
+            )
         quality_header = _document_quality_header(pipeline)
         if quality_header is not None:
             response.headers["X-Document-Quality"] = quality_header
         structure_header = _document_structure_header(pipeline)
         if structure_header is not None:
             response.headers["X-Document-Structure"] = structure_header
+        sections_header = _document_sections_header(pipeline)
+        if sections_header is not None:
+            response.headers["X-Document-Sections"] = sections_header
         return response
 
     except ValueError as ve:
@@ -458,6 +511,40 @@ async def get_text(
             media_type="application/json",
         )
     return JSONResponse(status_code=404, content={"error": "Text not found"})
+
+
+@router.get("/metadata/{artifact_id}")
+async def get_document_metadata(
+    artifact_id: str,
+    token: str | None = Query(default=None),
+    authorization: str | None = Header(default=None),
+):
+    access_token = _extract_bearer_token(authorization) or token
+    if not access_token:
+        return JSONResponse(
+            status_code=403, content={"error": "Document metadata access denied"}
+        )
+
+    try:
+        metadata_path = _metadata_artifacts.get(artifact_id, access_token)
+    except (InvalidArtifactReferenceError, ArtifactNotFoundError):
+        return JSONResponse(
+            status_code=404, content={"error": "Document metadata not found"}
+        )
+    except ArtifactAccessDeniedError:
+        return JSONResponse(
+            status_code=403, content={"error": "Document metadata access denied"}
+        )
+
+    exists = await asyncio.to_thread(_path_exists, metadata_path)
+    if exists:
+        return FileResponse(
+            metadata_path,
+            media_type="application/json",
+        )
+    return JSONResponse(
+        status_code=404, content={"error": "Document metadata not found"}
+    )
 
 
 # ---- AI Translation & Schema Extraction ----------------------------------

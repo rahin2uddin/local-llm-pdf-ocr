@@ -85,6 +85,7 @@ const refs = {
     readingOrder: document.getElementById('setting-reading-order'),
     qualityAnalysis: document.getElementById('setting-quality-analysis'),
     structureAnalysis: document.getElementById('setting-structure-analysis'),
+    sectionAnalysis: document.getElementById('setting-section-analysis'),
     pages: document.getElementById('setting-pages'),
     
     // Upload slots & active file card
@@ -186,6 +187,7 @@ async function loadConfig() {
         if (refs.readingOrder) refs.readingOrder.checked = documentProcessors.includes('reading_order');
         if (refs.qualityAnalysis) refs.qualityAnalysis.checked = documentProcessors.includes('quality_analysis');
         if (refs.structureAnalysis) refs.structureAnalysis.checked = documentProcessors.includes('structure_analysis');
+        if (refs.sectionAnalysis) refs.sectionAnalysis.checked = documentProcessors.includes('section_analysis');
 
         if (refs.pipelineModes) {
             for (const radio of refs.pipelineModes) {
@@ -206,6 +208,7 @@ function getSelectedDocumentProcessors() {
     if (refs.readingOrder?.checked) processors.push('reading_order');
     if (refs.qualityAnalysis?.checked) processors.push('quality_analysis');
     if (refs.structureAnalysis?.checked) processors.push('structure_analysis');
+    if (refs.sectionAnalysis?.checked) processors.push('section_analysis');
     return processors;
 }
 
@@ -248,7 +251,7 @@ function debounceSave() {
 }
 
 // Auto-save listeners
-[refs.apiBase, refs.apiKey, refs.modelSelect, refs.dpi, refs.concurrency, refs.denseMode, refs.maxImageDim, refs.denseThreshold, refs.refine, refs.selfCorrection, refs.binarize, refs.dualEngine, refs.spellcheck, refs.crossPage, refs.readingOrder, refs.qualityAnalysis, refs.structureAnalysis].forEach(el => {
+[refs.apiBase, refs.apiKey, refs.modelSelect, refs.dpi, refs.concurrency, refs.denseMode, refs.maxImageDim, refs.denseThreshold, refs.refine, refs.selfCorrection, refs.binarize, refs.dualEngine, refs.spellcheck, refs.crossPage, refs.readingOrder, refs.qualityAnalysis, refs.structureAnalysis, refs.sectionAnalysis].forEach(el => {
     if (!el) return;
     el.addEventListener('change', debounceSave);
     el.addEventListener('input', debounceSave);

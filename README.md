@@ -15,7 +15,7 @@ Turn scanned PDFs and images into searchable, selectable PDFs using local vision
 - **Dual Processing Paths**:
   - *Hybrid (Default)*: Surya layout detection -> VLM OCR -> Dynamic Programming (DP) text-to-box alignment. Automatically switches to per-box OCR on dense pages.
   - *Grounded*: Directly transcribes with layout positions using bbox-native VLMs (e.g. Qwen2.5-VL / Qwen3-VL), bypassing layout models.
-- **Local Document Processors**: Optional local post-OCR processors can normalize reading order, attach page-level quality analysis, and classify document structure without changing the searchable PDF output by default.
+- **Local Document Processors**: Optional local post-OCR processors can normalize reading order, attach page-level quality analysis, classify document structure, and group content under section headings without changing the searchable PDF output by default.
 - **Web Workspace**: Premium FastAPI-based web interface featuring page selection, live WebSocket progress tracking, text preview, translation, structured JSON data extraction (invoices, resumes, academic papers), and job history.
 
 ---
@@ -124,6 +124,9 @@ The Advanced Configuration panel also exposes local document processors:
 - **Reading Order** enables deterministic top-to-bottom, left-to-right block ordering before embedding.
 - **Quality Analysis** records page-level block counts, text density, and advisory findings in the pipeline document metadata. API responses include this as an `X-Document-Quality` header when enabled.
 - **Structure Analysis** classifies blocks with local heuristics for headings, paragraphs, list items, key-value lines, table candidates, and empty blocks. API responses include page-level summaries as an `X-Document-Structure` header when enabled.
+- **Section Analysis** groups blocks under detected headings and carries the active section across page boundaries. API responses include page-level summaries as an `X-Document-Sections` header when enabled.
+
+When processor metadata exists, OCR responses also include token-bound `X-Document-Metadata-Artifact-Id` and `X-Document-Metadata-Artifact-Token` headers. Fetch `GET /metadata/{artifact_id}` with that token to retrieve the compact page/block metadata report; the existing text artifact and searchable PDF outputs are unchanged.
 
 To run Celery/Redis translation worker:
 ```bash

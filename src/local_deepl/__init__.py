@@ -24,6 +24,7 @@ _EXPORT_MODULES = {
     "LOCAL_DOCUMENT_PROCESSOR_NAMES": "local_deepl.core.processors",
     "QualityAnalysisProcessor": "local_deepl.core.processors",
     "ReadingOrderProcessor": "local_deepl.core.processors",
+    "SectionAnalysisProcessor": "local_deepl.core.processors",
     "StructureAnalysisProcessor": "local_deepl.core.processors",
     "build_document_processors": "local_deepl.core.processors",
     "run_document_processors": "local_deepl.core.processors",

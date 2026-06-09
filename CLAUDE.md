@@ -40,7 +40,7 @@ The web workspace and `OCRPipeline.run()` expose settings that are not CLI flags
 - `dual_engine`
 - `spellcheck`
 - `cross_page`
-- `document_processors` (`reading_order`, `quality_analysis`, `structure_analysis`)
+- `document_processors` (`reading_order`, `quality_analysis`, `structure_analysis`, `section_analysis`)
 
 Do not document them as CLI options unless the CLI parser is updated.
 

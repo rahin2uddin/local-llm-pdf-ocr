@@ -82,17 +82,38 @@ export work because it sits after OCR cleanup but before PDF embedding.
   structure metadata exists.
 - The processor does not rewrite block text or change searchable PDF output.
 
+## Stage 3 Status
+
+- Added `section_analysis`, a local deterministic document processor that
+  assigns blocks to detected heading sections across page boundaries.
+- Section metadata is stored on `DocumentBlock.metadata["section"]`; page-level
+  summaries are stored on `DocumentPage.metadata["sections"]`.
+- Web/API selection uses the existing `document_processors` field. The web
+  Advanced Configuration panel now includes a Section Analysis toggle.
+- API responses include compact page summaries in `X-Document-Sections` when
+  section metadata exists.
+- The processor does not rewrite block text or change searchable PDF output.
+
+## Stage 4 Status
+
+- Added a narrow token-bound metadata artifact surface for optional document
+  processor outputs. OCR responses include `X-Document-Metadata-Artifact-Id`
+  and `X-Document-Metadata-Artifact-Token` only when report content exists.
+- `GET /metadata/{artifact_id}` accepts the token as a bearer token or query
+  parameter and returns compact JSON page/block summaries for quality,
+  structure, sections, and reading order.
+- The existing text artifact shape and searchable PDF output remain unchanged.
+  Defaults remain unchanged: no processors run unless selected.
+- Focused API safety coverage lives in `tests/test_api_safety.py`.
+
 ## Next Stage Prep
 
 - Keep LangGraph orchestration outside processor internals. Future stages should use
   plain Python processors and deterministic `DocumentResult` transforms.
-- Natural next targets are section/header grouping, richer table detection,
-  key-value extraction scaffolding, or export/report surfaces for
-  `DocumentResult` metadata.
+- Natural next targets are richer table detection, key-value extraction
+  scaffolding, or a UI panel that consumes the new metadata artifact.
 - Prefer extending `core/processors.py` and the existing
   `document_processors` API field before adding new route-specific flags.
-- If metadata grows beyond compact headers, add a token-bound metadata artifact
-  endpoint rather than changing the existing text artifact shape.
 - Preserve defaults: no document processors run unless explicitly selected.
 
 ## Follow-On Audit Targets
