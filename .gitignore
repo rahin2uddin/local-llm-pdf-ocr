@@ -170,6 +170,12 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# Local tool caches and agent scratch state
+.codex_tmp/
+.fallow/
+.jules/
+.uv-cache/
+
 # PyPI configuration file
 .pypirc
 
@@ -190,6 +196,7 @@ cython_debug/
 # Scratch / working directory
 /scratch/
 /chroma_db/
+examples/output_*.pdf
 
 # Stale root-level artifacts
 *.bat

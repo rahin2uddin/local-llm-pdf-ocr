@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 Build a ground-truth JSON fixture by extracting text + bboxes from an
-already-produced sandwich PDF (one of examples/output_*.pdf).
+already-produced sandwich PDF.
 
 Useful for examples that are too dense for the grounded VLM to handle
 in one call (notes.pdf, dense.pdf) — the hybrid pipeline already
@@ -9,9 +9,9 @@ produced per-box (bbox, text) pairs, so we can read them straight back
 out of the embedded text layer.
 
 Usage:
-    uv run scripts/fixture_from_output.py examples/output_notes.pdf \\
+    uv run scripts/fixture_from_output.py scratch/output_notes.pdf \\
         tests/fixtures/ground_truth_notes.json
-    uv run scripts/fixture_from_output.py examples/output_dense.pdf \\
+    uv run scripts/fixture_from_output.py scratch/output_dense.pdf \\
         tests/fixtures/ground_truth_dense.json --source-name dense.pdf
 """
 
@@ -29,7 +29,7 @@ sys.stdout.reconfigure(encoding="utf-8")
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("output_pdf", help="Path to an existing output_*.pdf")
+    parser.add_argument("output_pdf", help="Path to an existing sandwich PDF output")
     parser.add_argument("fixture", help="Path to write the new fixture JSON")
     parser.add_argument(
         "--source-name", default=None,
