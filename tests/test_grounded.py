@@ -180,8 +180,11 @@ class _StubGroundedBackend:
         self.response = GroundedResponse(blocks=blocks, page_sizes=page_sizes)
         self.called_with: list[str] = []
         self.progress_calls: list[tuple] = []
+        self.warning_calls: list[tuple[int, BaseException]] = []
 
-    async def ocr_document(self, pdf_path: str, progress=None) -> GroundedResponse:
+    async def ocr_document(
+        self, pdf_path: str, progress=None, on_warning=None
+    ) -> GroundedResponse:
         self.called_with.append(pdf_path)
         if progress is not None:
             # Mimic a real backend's per-page emission so pipeline-level
@@ -260,6 +263,51 @@ def test_grounded_path_preserves_bbox_position(
         )
         overlap = inter.get_area() / max(1e-6, wr.get_area())
         assert overlap >= 0.5, f"overlap too low: {overlap:.2f}"
+
+
+def test_grounded_path_propagates_failed_pages_to_pipeline(
+    example_pdfs: dict[str, Path], tmp_path: Path
+):
+    """When a grounded backend reports per-page failures, the pipeline
+    surfaces them on ``last_failed_pages`` and forwards them to the
+    caller's ``on_warning`` callback."""
+
+    class _FailingGroundedBackend(_StubGroundedBackend):
+        def __init__(self, fail_pages: set[int]):
+            super().__init__(blocks=[], page_sizes=[(1000, 1300)] * 3)
+            self.fail_pages = fail_pages
+            self._counter = 0
+
+        async def ocr_document(self, pdf_path, progress=None, on_warning=None):
+            self.called_with.append(pdf_path)
+            for page_idx in range(3):
+                if page_idx in self.fail_pages:
+                    err = RuntimeError(f"grounded failure on page {page_idx}")
+                    if on_warning is not None:
+                        await on_warning(page_idx, err)
+            return GroundedResponse(
+                blocks=[],
+                page_sizes=[(1000, 1300)] * 3,
+                failed_pages=sorted(self.fail_pages),
+            )
+
+    warnings: list[tuple[int, BaseException]] = []
+
+    async def on_warning(page_index, exc):
+        warnings.append((page_index, exc))
+
+    backend = _FailingGroundedBackend(fail_pages={0, 2})
+    pipe = OCRPipeline(pdf_handler=PDFHandler(), grounded_backend=backend)
+
+    input_pdf = str(example_pdfs["digital.pdf"])
+    output_pdf = str(tmp_path / "grounded_partial.pdf")
+    asyncio.run(pipe.run(input_pdf, output_pdf, on_warning=on_warning))
+
+    assert pipe.last_failed_pages == [0, 2]
+    assert [w[0] for w in warnings] == [0, 2]
+    assert all(isinstance(w[1], RuntimeError) for w in warnings)
+    # PDF still written.
+    assert Path(output_pdf).exists()
 
 
 def test_pipeline_rejects_construction_without_pdf_handler():
@@ -367,7 +415,7 @@ class TestPromptedGroundedResilience:
         # Reach into the backend's own loop by providing a PDF whose page count
         # matches. Easier: subclass and override the rasterization step.
         class _Fixed(PromptedGroundedOCR):
-            async def ocr_document(self, pdf_path, progress=None):
+            async def ocr_document(self, pdf_path, progress=None, on_warning=None):
                 # Copy the live method but seed page_imgs directly.
                 self_ = self
                 import asyncio as _a

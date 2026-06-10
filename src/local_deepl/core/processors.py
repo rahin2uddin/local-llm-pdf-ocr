@@ -413,12 +413,47 @@ class TableExtractionProcessor:
         return document
 
     def _is_candidate(self, block: DocumentBlock) -> bool:
+        """Decide whether a block is a possible table cell.
+
+        The pre-filter has two complementary signals so the row-bucketing
+        pass in :meth:`_extract_page_tables` gets a fair chance to find a
+        grid:
+
+        1. **Column-separator heuristic** — block text contains
+           ``min_columns`` or more tab/pipe/multi-space columns. Catches
+           aligned, whitespace-padded cell content.
+        2. **Cell-shape heuristic** — block is short text in a narrow box
+           (width < 35% of page, area < 8% of page). Catches grid layouts
+           where each cell is a single short token, which the separator
+           heuristic misses.
+
+        We intentionally do NOT consult :func:`_structure_kind`: requiring a
+        pre-classified ``table_candidate`` label from
+        :class:`StructureAnalysisProcessor` made the table extraction
+        silently produce empty results when a user enabled ``table_extraction``
+        *without* also enabling ``structure_analysis`` in the right order
+        (or, equivalently, when only ``layout_enrichment`` ran first). The
+        row-tolerance and ``min_columns`` filters in
+        :meth:`_extract_page_tables` protect against false positives — a
+        page full of narrow short blocks won't form a 2-row × 2-column grid
+        unless they're actually arranged as one.
+        """
         text = _normalize_space(block.text)
         if not text:
             return False
-        if _structure_kind(block) == "table_candidate":
+        if len(_TABLE_SPLIT_RE.split(text)) >= self.min_columns:
             return True
-        return len(_TABLE_SPLIT_RE.split(text)) >= self.min_columns
+        # Cell-shape: a single-token block in a narrow, small box is more
+        # likely a grid cell than a paragraph. Tuned for typical Letter
+        # pages: a cell occupies < 35% of page width and < 8% of page area,
+        # and the token is short (≤ 24 chars after whitespace collapse).
+        if len(text) > 24:
+            return False
+        x0, y0, x1, y1 = block.bbox
+        width = max(0.0, x1 - x0)
+        height = max(0.0, y1 - y0)
+        area = width * height
+        return width < 0.35 and area < 0.08
 
     def _extract_page_tables(
         self, page: DocumentPage, candidate_indices: list[int]

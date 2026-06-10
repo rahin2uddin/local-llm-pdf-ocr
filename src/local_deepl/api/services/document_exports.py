@@ -22,32 +22,52 @@ EXPORT_MEDIA_TYPES: dict[str, str] = {
     "mineru": "application/json",
 }
 
+# Runtime whitelist used when validating free-form string input. Keeps
+# the public DocumentExportFormat Literal honest as a documentation aid
+# while still letting callers pass an already-validated str.
+_SUPPORTED_FORMATS: frozenset[str] = frozenset(
+    {"json", "markdown", "text", "docling", "mineru"}
+)
+
+
+def _coerce_format(value: str) -> str:
+    if value not in _SUPPORTED_FORMATS:
+        raise InvalidArtifactPayloadError(f"Unsupported export format: {value}")
+    return value
+
 
 def build_document_export(
     *,
     page_text: Mapping[str, list[str]],
     metadata: Mapping[str, Any] | None,
-    export_format: DocumentExportFormat,
+    export_format: str,
 ) -> str | dict[str, Any]:
-    if export_format == "text":
+    # `export_format` is typed as plain `str` so callers may pass either a
+    # ``DocumentExportFormat`` StrEnum (e.g. ``body.export_format.value``) or
+    # a raw literal string. The runtime whitelist check below rejects any
+    # other value, so the Literal type remains the source of truth for
+    # what's actually supported.
+    format_name = _coerce_format(export_format)
+    if format_name == "text":
         return _plain_text(page_text)
-    if export_format == "markdown":
+    if format_name == "markdown":
         return _markdown(page_text)
-    if export_format == "json":
+    if format_name == "json":
         return {"pages": _pages_json(page_text), "metadata": metadata}
-    if export_format == "docling":
+    if format_name == "docling":
         return {
             "schema": "docling_compatible",
             "document": _pages_json(page_text),
             "metadata": metadata,
         }
-    if export_format == "mineru":
+    if format_name == "mineru":
         return {
             "schema": "mineru_compatible",
             "pages": _pages_json(page_text),
             "metadata": metadata,
         }
-    raise InvalidArtifactPayloadError(f"Unsupported export format: {export_format}")
+    # Unreachable — _coerce_format raises first.
+    raise InvalidArtifactPayloadError(f"Unsupported export format: {format_name}")
 
 
 def write_document_export_atomic(
@@ -55,20 +75,21 @@ def write_document_export_atomic(
     *,
     directory: str | os.PathLike[str] | None = None,
     artifact_id: str,
-    export_format: DocumentExportFormat,
+    export_format: str,
 ) -> str:
     if not is_opaque_artifact_id(artifact_id):
         raise InvalidArtifactReferenceError(
             "Artifact ID must be a 32-character hex string."
         )
 
+    format_name = _coerce_format(export_format)
     artifact_dir = Path(directory or tempfile.gettempdir()).resolve()
     artifact_dir.mkdir(parents=True, exist_ok=True)
     suffix = (
         "md"
-        if export_format == "markdown"
+        if format_name == "markdown"
         else "txt"
-        if export_format == "text"
+        if format_name == "text"
         else "json"
     )
     target = artifact_dir / f"export_{artifact_id}.{suffix}"

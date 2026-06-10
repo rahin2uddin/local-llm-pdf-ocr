@@ -106,6 +106,72 @@ def test_job_history_rejects_invalid_boundary_values() -> None:
         )
 
 
+def test_job_history_failed_pages_round_trip_and_serialize_when_set() -> None:
+    """failed_pages: round-trips, dedupes, and serializes only when non-empty."""
+    history = JobHistory(now=Clock())
+
+    record = history.record(
+        job_id="job-1",
+        filename="file.pdf",
+        model="vlm",
+        pipeline_mode="hybrid",
+        pages=None,
+        duration_s=1.0,
+        status="complete",
+        failed_pages=[2, 0, 2, 5],
+    )
+
+    # Dedup preserves first-seen order.
+    assert record.failed_pages == (2, 0, 5)
+    serialized = record.to_dict()
+    assert serialized["failed_pages"] == [2, 0, 5]
+
+
+def test_job_history_failed_pages_omitted_from_serialize_when_empty() -> None:
+    """Backward-compat: an empty failed_pages must NOT add a new key to the wire format."""
+    history = JobHistory(now=Clock())
+
+    record = history.record(
+        job_id="job-1",
+        filename="file.pdf",
+        model="vlm",
+        pipeline_mode="hybrid",
+        pages=None,
+        duration_s=1.0,
+        status="complete",
+    )
+
+    assert "failed_pages" not in record.to_dict()
+
+
+def test_job_history_rejects_malformed_failed_pages() -> None:
+    history = JobHistory(now=Clock())
+
+    with pytest.raises(TypeError):
+        history.record(
+            job_id="job-1",
+            filename="file.pdf",
+            model="vlm",
+            pipeline_mode="hybrid",
+            pages=None,
+            duration_s=1.0,
+            status="complete",
+            failed_pages=["not-int"],  # type: ignore[arg-type]
+        )
+
+    with pytest.raises(ValueError):
+        history.record(
+            job_id="job-1",
+            filename="file.pdf",
+            model="vlm",
+            pipeline_mode="hybrid",
+            pages=None,
+            duration_s=1.0,
+            status="complete",
+            failed_pages=[-1],
+        )
+
+
 @pytest.mark.parametrize(
     ("stage", "current", "total", "expected"),
     [

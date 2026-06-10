@@ -20,6 +20,15 @@ Components are injected so extensions can swap any phase:
 Progress reporting via optional async callback:
     async def progress(stage: str, current: int, total: int, message: str) -> None
     stages: "convert" | "detect" | "ocr" | "refine" | "embed"
+
+Per-page failure isolation:
+    When a page-level OCR call raises, the pipeline catches the
+    exception, records the page in ``self.last_failed_pages``, emits a
+    warning via the optional ``on_warning`` callback, and continues
+    with the surviving pages. The output PDF is still written (with
+    empty searchable text on the failed page) so the rest of the
+    document remains useful. ``on_warning`` is called as
+    ``await on_warning(page_index, exc)`` exactly once per failed page.
 """
 
 from __future__ import annotations
@@ -40,6 +49,7 @@ from local_deepl.core.routing import QualityRoutingOptions, QualityRoutingPolicy
 from local_deepl.utils.image import crop_for_ocr_from_image
 
 ProgressCallback = Callable[[str, int, int, str], Awaitable[None]]
+WarningCallback = Callable[[int, BaseException], Awaitable[None]]
 OutputWriter = Callable[[str, str, dict, int], None]
 
 
@@ -93,6 +103,7 @@ class OCRPipeline:
         # Exposed for web extraction/export flows that need the richer document
         # graph after the legacy pages-data payload has been produced.
         self.last_document_result: DocumentResult | None = None
+        self.last_failed_pages: list[int] = []
         self.document_processors = tuple(document_processors or ())
         self.page_preprocessor = page_preprocessor
 
@@ -116,6 +127,7 @@ class OCRPipeline:
         preprocessing_options: PagePreprocessingOptions | None = None,
         quality_routing_options: QualityRoutingOptions | None = None,
         progress: ProgressCallback | None = None,
+        on_warning: WarningCallback | None = None,
     ) -> dict[int, list[str]]:
         """
         Execute the full pipeline and return raw LLM text per processed page.
@@ -159,6 +171,7 @@ class OCRPipeline:
                 spellcheck=spellcheck,
                 cross_page=cross_page,
                 progress=progress,
+                on_warning=on_warning,
             )
 
         if self.aligner is None or self.ocr_processor is None:
@@ -166,6 +179,11 @@ class OCRPipeline:
                 "Hybrid pipeline requires both `aligner` and `ocr_processor`. "
                 "Pass a `grounded_backend=...` instead to use the grounded path."
             )
+
+        # Reset per-run failure tracking. Set before the first awaitable that
+        # could raise so a failed call in this run never leaks state from a
+        # previous run on the same pipeline instance.
+        self.last_failed_pages = []
 
         await _notify(progress, "convert", 0, 1, "Converting PDF to images...")
         images_dict = await asyncio.to_thread(
@@ -262,7 +280,7 @@ class OCRPipeline:
                     )
                     # No "raw lines" in per-box mode — each box's text IS the answer.
                     llm_lines = [t for _, t in aligned if t]
-                    return p_num, llm_lines, aligned
+                    return p_num, llm_lines, aligned, None
                 async with semaphore:
                     llm_lines = await self.ocr_processor.perform_ocr(
                         images_dict[p_num],
@@ -276,12 +294,19 @@ class OCRPipeline:
                         )
                     else:
                         aligned = pages_structured[p_num]
-                    return p_num, llm_lines, aligned
+                    return p_num, llm_lines, aligned, None
             except Exception as e:
+                # Per-page failure isolation. We never want a single bad
+                # page to abort the whole run: log the exception, record
+                # the page in `last_failed_pages`, surface it via
+                # `on_warning` (if wired), and return empty text for the
+                # page so downstream stages still see *something*. The
+                # resulting PDF has empty searchable text on the failed
+                # page; the rest of the document is unaffected.
                 import logging
 
                 logging.warning(f"OCR failed for page {p_num}: {type(e).__name__}: {e}")
-                return p_num, [], pages_structured[p_num]
+                return p_num, [], pages_structured[p_num], e
 
         completed = 0
         ocr_label = (
@@ -294,7 +319,7 @@ class OCRPipeline:
         async with asyncio.TaskGroup() as tg:
             tasks = [tg.create_task(process_page(p)) for p in page_nums]
             for coro in asyncio.as_completed(tasks):
-                p_num, llm_lines, aligned = await coro
+                p_num, llm_lines, aligned, page_error = await coro
 
                 pages_text[p_num] = llm_lines
                 pages_structured[p_num] = aligned
@@ -306,6 +331,10 @@ class OCRPipeline:
                     total,
                     f"{ocr_label} ({completed}/{total})",
                 )
+                if page_error is not None:
+                    self.last_failed_pages.append(p_num)
+                    if on_warning is not None:
+                        await on_warning(p_num, page_error)
 
         # --- Phase 3: per-box crop re-OCR for low-confidence boxes ---
         # Skip refine for pages that already went through per-box OCR —
@@ -372,6 +401,7 @@ class OCRPipeline:
         spellcheck: str = "none",
         cross_page: bool = False,
         progress: ProgressCallback | None,
+        on_warning: WarningCallback | None = None,
     ) -> dict[int, list[str]]:
         """
         Grounded path: the backend returns (bbox, text) pairs directly.
@@ -383,11 +413,21 @@ class OCRPipeline:
         responsible for per-page tick emission; we forward the callback
         directly so the user sees granular progress instead of a 0 → 100
         jump during multi-page grounded runs.
+
+        Per-page failures at the backend are recorded on
+        ``self.last_failed_pages`` and forwarded through ``on_warning``,
+        same as the hybrid path.
         """
+        # Reset per-run failure tracking. The grounded backend never
+        # touches ``self.last_failed_pages`` directly; the pipeline
+        # reflects what the backend reports in ``response.failed_pages``.
+        self.last_failed_pages = []
         assert self.grounded_backend is not None
         response = await self.grounded_backend.ocr_document(
-            input_path, progress=progress
+            input_path, progress=progress, on_warning=on_warning
         )
+        if response.failed_pages:
+            self.last_failed_pages.extend(response.failed_pages)
 
         pages_data: dict[int, list[tuple[list[float], str]]] = defaultdict(list)
         for block in response.blocks:

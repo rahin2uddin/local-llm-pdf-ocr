@@ -1,18 +1,28 @@
 from __future__ import annotations
 
 from collections import deque
-from collections.abc import Callable
-from dataclasses import asdict, dataclass
+from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Literal, cast
 
 JobStatus = Literal["complete", "error", "rejected"]
 _MAX_TEXT_LENGTH = 512
+_MAX_FAILED_PAGES = 10_000
 
 
 @dataclass(frozen=True)
 class JobRecord:
-    """Deterministic API shape for a completed or rejected OCR job."""
+    """Deterministic API shape for a completed or rejected OCR job.
+
+    ``failed_pages`` lists 0-indexed page numbers whose OCR pipeline raised
+    an exception and was caught at the per-page isolation boundary. A job
+    with a non-empty ``failed_pages`` still has ``status="complete"`` —
+    the pipeline degrades gracefully and writes a PDF with empty
+    searchable text on the failed pages, so the rest of the document
+    is still useful. The list is omitted from :meth:`to_dict` when empty
+    to preserve the wire format for the common no-failure case.
+    """
 
     id: str
     filename: str
@@ -22,9 +32,22 @@ class JobRecord:
     duration_s: float
     timestamp: str
     status: JobStatus
+    failed_pages: tuple[int, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        payload: dict[str, Any] = {
+            "id": self.id,
+            "filename": self.filename,
+            "model": self.model,
+            "pipeline_mode": self.pipeline_mode,
+            "pages": self.pages,
+            "duration_s": self.duration_s,
+            "timestamp": self.timestamp,
+            "status": self.status,
+        }
+        if self.failed_pages:
+            payload["failed_pages"] = list(self.failed_pages)
+        return payload
 
 
 class JobHistory:
@@ -55,6 +78,7 @@ class JobHistory:
         pages: str | None,
         duration_s: float,
         status: JobStatus,
+        failed_pages: Sequence[int] = (),
     ) -> JobRecord:
         record = JobRecord(
             id=_clean_required_text(job_id, "job_id"),
@@ -65,6 +89,7 @@ class JobHistory:
             duration_s=_clean_duration(duration_s),
             timestamp=_current_timestamp(self._now),
             status=_clean_status(status),
+            failed_pages=_clean_failed_pages(failed_pages),
         )
         self._records.append(record)
         return record
@@ -115,3 +140,22 @@ def _clean_status(value: str) -> JobStatus:
     if value not in {"complete", "error", "rejected"}:
         raise ValueError("status must be one of: complete, error, rejected.")
     return cast(JobStatus, value)
+
+
+def _clean_failed_pages(value: Sequence[int]) -> tuple[int, ...]:
+    if not isinstance(value, Sequence) or isinstance(value, (str, bytes, bytearray)):
+        raise TypeError("failed_pages must be a sequence of integers.")
+    cleaned: list[int] = []
+    seen: set[int] = set()
+    for item in value:
+        if isinstance(item, bool) or not isinstance(item, int):
+            raise TypeError("failed_pages entries must be integers.")
+        if item < 0:
+            raise ValueError("failed_pages entries must be non-negative.")
+        if item in seen:
+            continue
+        seen.add(item)
+        cleaned.append(item)
+        if len(cleaned) > _MAX_FAILED_PAGES:
+            raise ValueError(f"failed_pages exceeds {_MAX_FAILED_PAGES} entries.")
+    return tuple(cleaned)

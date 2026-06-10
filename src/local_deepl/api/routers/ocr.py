@@ -6,6 +6,7 @@ import re
 import tempfile
 import time
 import uuid
+from collections.abc import Sequence
 from typing import Any, cast
 
 from fastapi import APIRouter, File, Form, Header, Query, UploadFile
@@ -193,8 +194,16 @@ def _record_job(
     pages: str | None,
     duration_s: float,
     status: JobStatus,
+    failed_pages: Sequence[int] = (),
 ) -> None:
-    """Append a validated job record to the capped in-memory history."""
+    """Append a validated job record to the capped in-memory history.
+
+    ``failed_pages`` is the 0-indexed list of pages whose OCR call
+    raised an exception that the pipeline caught at its per-page
+    isolation boundary. Empty in the common case — the job history
+    omits the field from the serialized record when it's empty so
+    existing clients see the same shape as before.
+    """
     _job_history.record(
         job_id=job_id,
         filename=filename,
@@ -203,6 +212,7 @@ def _record_job(
         pages=pages,
         duration_s=duration_s,
         status=status,
+        failed_pages=failed_pages,
     )
 
 
@@ -367,6 +377,12 @@ async def process_pdf(
         )
         backend: Any
         if settings.pipeline_mode == "grounded":
+            # Grounded path: the backend returns (bbox, text) pairs directly,
+            # so we do NOT need HybridAligner (which loads Surya's detection
+            # model — ~hundreds of MB on first call) or a per-page OCRProcessor
+            # (which the pipeline never invokes in grounded mode). Building
+            # them here is pure waste and a known tech-debt wart; the grounded
+            # branch now mirrors the hybrid branch's structure 1:1.
             backend = PromptedGroundedOCR(
                 api_base=settings.api_base,
                 api_key=settings.api_key,
@@ -375,19 +391,13 @@ async def process_pdf(
                 concurrency=settings.concurrency,
             )
             pipeline = OCRPipeline(
-                aligner=HybridAligner(),
-                ocr_processor=OCRProcessor(
-                    api_base=settings.api_base,
-                    api_key=settings.api_key,
-                    model=settings.model,
-                ),
                 pdf_handler=PDFHandler(),
                 grounded_backend=backend,
                 document_processors=processors,
                 page_preprocessor=page_preprocessor,
             )
         else:
-            # Default: hybrid mode
+            # Default: hybrid mode — Surya detect + LLM OCR + DP alignment.
             backend = OCRProcessor(
                 api_base=settings.api_base,
                 api_key=settings.api_key,
@@ -436,6 +446,30 @@ async def process_pdf(
                 stage=stage,
             )
 
+        # -- Per-page warning callback --------------------------------------
+        # The pipeline catches per-page exceptions and continues; we
+        # surface the failure both as a WebSocket warning frame (so the
+        # UI can flag the page in real time) and on the final response /
+        # job record. Status stays "complete" because the pipeline
+        # degrades gracefully — the PDF is still written, with empty
+        # searchable text on the failed page.
+        async def on_warning(page_index, exc):
+            warning_message = (
+                f"OCR failed for page {page_index + 1}: {type(exc).__name__}"
+            )
+            # We don't know the current OCR percent at the moment of
+            # failure without plumbing it through the pipeline; pass 0
+            # so the warning frame doesn't push the progress bar
+            # backward. The frontend renders the warning text and is
+            # free to ignore ``percent`` on warning frames.
+            await manager.send_progress(
+                progress_target,
+                warning_message,
+                0,
+                stage="ocr",
+                warning=True,
+            )
+
         # -- Run the pipeline ------------------------------------------------
         pages_text = await pipeline.run(
             input_path,
@@ -455,7 +489,10 @@ async def process_pdf(
             preprocessing_options=preprocessing_options,
             quality_routing_options=quality_routing_options,
             progress=on_progress,
+            on_warning=on_warning,
         )
+
+        failed_pages = list(pipeline.last_failed_pages)
 
         # -- Persist extracted text for token-bound later retrieval ----------
         artifact_handle = await asyncio.to_thread(
@@ -474,11 +511,20 @@ async def process_pdf(
             pages=settings.pages,
             duration_s=duration_s,
             status="complete",
+            failed_pages=failed_pages,
         )
 
-        await manager.send_progress(
-            progress_target, "Done! Preparing download...", 100, stage="complete"
-        )
+        if failed_pages:
+            await manager.send_progress(
+                progress_target,
+                f"Completed with {len(failed_pages)} page failure(s).",
+                100,
+                stage="complete",
+            )
+        else:
+            await manager.send_progress(
+                progress_target, "Done! Preparing download...", 100, stage="complete"
+            )
 
         response = FileResponse(
             output_path,
@@ -487,6 +533,8 @@ async def process_pdf(
             background=BackgroundTask(_cleanup, input_path, output_path),
         )
         response.headers["X-Text-Artifact-Id"] = artifact_handle.artifact_id
+        if failed_pages:
+            response.headers["X-Failed-Pages"] = ",".join(str(p) for p in failed_pages)
         response.headers["X-Text-Artifact-Token"] = artifact_handle.token
         response.headers["X-Document-Workflow"] = json.dumps(
             build_workflow_summary(settings), separators=(",", ":"), sort_keys=True
@@ -610,9 +658,7 @@ async def get_document_metadata(
 @router.post("/api/export/document")
 async def create_document_export(body: DocumentExportRequest):
     try:
-        text_path = _text_artifacts.get(
-            body.text_artifact_id, body.text_artifact_token
-        )
+        text_path = _text_artifacts.get(body.text_artifact_id, body.text_artifact_token)
         page_text = await asyncio.to_thread(load_json_file, text_path)
         metadata = None
         if body.metadata_artifact_id and body.metadata_artifact_token:
@@ -621,10 +667,14 @@ async def create_document_export(body: DocumentExportRequest):
             )
             metadata = await asyncio.to_thread(load_json_file, metadata_path)
 
+        # `body.export_format` is a DocumentExportFormat StrEnum; the
+        # document_exports module accepts a string Literal, so coerce once
+        # here to keep the typed contract explicit and avoid the mypy drift.
+        export_format_value = body.export_format.value
         payload = build_document_export(
             page_text=cast(dict[str, list[str]], page_text),
             metadata=cast(dict[str, Any] | None, metadata),
-            export_format=body.export_format,
+            export_format=export_format_value,
         )
         artifact_id = _export_artifacts.issue_id()
         token = _export_artifacts.issue_token()
@@ -633,18 +683,20 @@ async def create_document_export(body: DocumentExportRequest):
             payload,
             directory=_export_artifacts.artifact_dir,
             artifact_id=artifact_id,
-            export_format=body.export_format,
+            export_format=export_format_value,
         )
         handle = _export_artifacts.put(artifact_id=artifact_id, token=token, path=path)
         return {
             "artifact_id": handle.artifact_id,
             "token": handle.token,
-            "format": body.export_format,
+            "format": export_format_value,
         }
     except ArtifactAccessDeniedError:
         return JSONResponse(status_code=403, content={"error": "Export access denied"})
     except (InvalidArtifactReferenceError, ArtifactNotFoundError):
-        return JSONResponse(status_code=404, content={"error": "Export input not found"})
+        return JSONResponse(
+            status_code=404, content={"error": "Export input not found"}
+        )
 
 
 @router.get("/export/{artifact_id}")

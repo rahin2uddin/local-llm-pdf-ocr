@@ -46,16 +46,36 @@ class ConnectionManager:
             return False
 
     async def send_progress(
-        self, channel_id: str | None, message: str, percent: int, stage: str = ""
+        self,
+        channel_id: str | None,
+        message: str,
+        percent: int,
+        stage: str = "",
+        warning: bool = False,
     ) -> None:
-        """Send a JSON progress frame to an active authorized channel."""
+        """Send a JSON progress frame to an active authorized channel.
+
+        ``warning=True`` flags the frame as a non-fatal per-page warning
+        (e.g. "OCR failed for page 7: TimeoutError") so the UI can
+        surface partial-failure indicators without interpreting a
+        transient frame as a stage transition. The current
+        ``percent`` is preserved so the progress bar doesn't jump
+        backward on a warning.
+        """
         if not channel_id:
             return
         ws = self.active.get(channel_id)
         if ws is None:
             return
         try:
-            await ws.send_json({"status": message, "percent": percent, "stage": stage})
+            payload: dict[str, object] = {
+                "status": message,
+                "percent": percent,
+                "stage": stage,
+            }
+            if warning:
+                payload["warning"] = True
+            await ws.send_json(payload)
         except Exception:
             self.disconnect(channel_id)
 

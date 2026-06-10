@@ -39,9 +39,9 @@ def evaluate_document(
     blocks = [block for page in document.pages for block in page.blocks]
     ordered = sum(1 for block in blocks if block.reading_order is not None)
     tables = sum(
-        len(page.metadata.get("tables", []))
+        len(tables)
         for page in document.pages
-        if isinstance(page.metadata.get("tables"), list)
+        if isinstance(tables := page.metadata.get("tables"), list)
     )
     return EvaluationMetrics(
         text_similarity=text_similarity,

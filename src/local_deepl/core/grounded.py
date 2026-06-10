@@ -45,6 +45,7 @@ load_dotenv()
 
 
 ProgressCallback = Callable[[str, int, int, str], Awaitable[None]]
+WarningCallback = Callable[[int, BaseException], Awaitable[None]]
 
 
 @dataclass
@@ -59,6 +60,7 @@ class GroundedBlock:
 class GroundedResponse:
     blocks: list[GroundedBlock]
     page_sizes: list[tuple[int, int]] = field(default_factory=list)  # (w, h) per page
+    failed_pages: list[int] = field(default_factory=list)
 
 
 class GroundedOCRBackend(Protocol):
@@ -68,12 +70,18 @@ class GroundedOCRBackend(Protocol):
     can omit it. Backends SHOULD emit the `"ocr"` stage with (current,
     total) set to pages-completed / total-pages so the pipeline's progress
     adapter stays aligned with the documented stage set.
+
+    `on_warning` is called once per page whose OCR call raised an
+    exception at the backend's per-page isolation boundary. The
+    pipeline uses it (alongside `failed_pages` on the response) to
+    surface partial failures to the caller.
     """
 
     async def ocr_document(
         self,
         pdf_path: str,
         progress: ProgressCallback | None = None,
+        on_warning: WarningCallback | None = None,
     ) -> GroundedResponse: ...
 
 
@@ -317,6 +325,7 @@ class ZAIHostedOCR:
         self,
         pdf_path: str,
         progress: ProgressCallback | None = None,
+        on_warning: WarningCallback | None = None,
     ) -> GroundedResponse:
         headers = {"Authorization": f"Bearer {self.api_key}"}
 
@@ -479,6 +488,7 @@ class PromptedGroundedOCR:
         self,
         pdf_path: str,
         progress: ProgressCallback | None = None,
+        on_warning: WarningCallback | None = None,
     ) -> GroundedResponse:
         # 1. Rasterize every page, remembering dimensions.
         # Offloaded to a worker thread — fitz.open / get_pixmap are blocking
@@ -498,7 +508,9 @@ class PromptedGroundedOCR:
         litellm_model = self.model
         custom_provider = resolve_custom_provider(litellm_model)
 
-        async def run_one(page_idx: int) -> tuple[int, list[GroundedBlock]]:
+        async def run_one(
+            page_idx: int,
+        ) -> tuple[int, list[GroundedBlock], BaseException | None]:
             b64, w, h = page_imgs[page_idx]
             async with sem:
                 try:
@@ -526,23 +538,28 @@ class PromptedGroundedOCR:
                         ],
                     )
                     text = (resp.choices[0].message.content or "").strip()
-                    return page_idx, _parse_grounded_json(text, page_idx, w, h)
+                    return page_idx, _parse_grounded_json(text, page_idx, w, h), None
                 except Exception as e:
-                    # Per-page isolation: log the failure and return zero blocks
-                    # for this page so surviving pages still land in the output.
+                    # Per-page isolation: log the failure and return zero
+                    # blocks for this page so surviving pages still land in
+                    # the output. The exception is bubbled up via the
+                    # 3-tuple so the caller can surface it (e.g. via the
+                    # pipeline's `on_warning` and the response's
+                    # `failed_pages`).
                     logging.warning(
                         f"grounded OCR failed for page {page_idx}: "
                         f"{type(e).__name__}: {e}"
                     )
-                    return page_idx, []
+                    return page_idx, [], e
 
         tasks = [asyncio.create_task(run_one(i)) for i in range(total_pages)]
         blocks_by_page: dict[int, list[GroundedBlock]] = {}
+        failed_pages: list[int] = []
         completed = 0
         if progress is not None:
             await progress("ocr", 0, total_pages, f"Grounded OCR (0/{total_pages})...")
         for fut in asyncio.as_completed(tasks):
-            page_idx, blocks = await fut
+            page_idx, blocks, page_error = await fut
             blocks_by_page[page_idx] = blocks
             completed += 1
             if progress is not None:
@@ -552,6 +569,10 @@ class PromptedGroundedOCR:
                     total_pages,
                     f"Grounded OCR ({completed}/{total_pages})",
                 )
+            if page_error is not None:
+                failed_pages.append(page_idx)
+                if on_warning is not None:
+                    await on_warning(page_idx, page_error)
 
         # Flatten in page order for a stable, deterministic output.
         flat_blocks: list[GroundedBlock] = []
@@ -560,6 +581,7 @@ class PromptedGroundedOCR:
         return GroundedResponse(
             blocks=flat_blocks,
             page_sizes=[(w, h) for (_, w, h) in page_imgs],
+            failed_pages=failed_pages,
         )
 
 

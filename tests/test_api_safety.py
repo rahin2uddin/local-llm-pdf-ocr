@@ -138,7 +138,7 @@ def test_process_issues_opaque_text_artifact_ids_and_prevents_client_id_lookup(
 ):
     class DummyPipeline:
         def __init__(self, *args, **kwargs):
-            pass
+            self.last_failed_pages: list[int] = []
 
         async def run(self, input_path, output_path, **kwargs):
             Path(output_path).write_bytes(b"%PDF-1.4\n%%EOF\n")
@@ -236,6 +236,7 @@ def test_process_omits_document_metadata_artifact_when_no_report(tmp_path: Path)
     class DummyPipeline:
         def __init__(self, *args, **kwargs):
             self.last_document_result = None
+            self.last_failed_pages: list[int] = []
 
         async def run(self, input_path, output_path, **kwargs):
             Path(output_path).write_bytes(b"%PDF-1.4\n%%EOF\n")
@@ -274,6 +275,7 @@ def test_process_exposes_token_bound_document_metadata_artifact(tmp_path: Path):
     class DummyPipeline:
         def __init__(self, *args, **kwargs):
             self.last_document_result = None
+            self.last_failed_pages: list[int] = []
 
         async def run(self, input_path, output_path, **kwargs):
             Path(output_path).write_bytes(b"%PDF-1.4\n%%EOF\n")
@@ -421,6 +423,96 @@ def test_progress_session_uses_token_bound_websocket_channels():
             session["channel_id"], session["session_token"]
         )
         assert not websocket.manager.is_authorized(session["channel_id"], "A" * 32)
+
+
+def test_process_surfaces_partial_page_failures_in_headers_and_history(tmp_path: Path):
+    """A page whose OCR call raises must be reported in the response
+    ``X-Failed-Pages`` header and the job-history record. The job
+    status stays ``"complete"`` — the pipeline degrades gracefully and
+    writes a PDF even with bad pages.
+
+    The WebSocket frame shape is covered separately by
+    ``test_websocket_manager_emits_warning_flag``; here we just confirm
+    the router wires the partial-failure signal through.
+    """
+
+    class _FailingDummyPipeline:
+        def __init__(self, *args, **kwargs):
+            self.last_document_result = None
+            self.last_failed_pages: list[int] = [1]  # 0-indexed page 1 fails
+
+        async def run(self, input_path, output_path, **kwargs):
+            on_warning = kwargs.get("on_warning")
+            if on_warning is not None:
+                await on_warning(1, RuntimeError("simulated page 1 failure"))
+            Path(output_path).write_bytes(b"%PDF-1.4\n%%EOF\n")
+            return {0: ["page0"], 1: [], 2: ["page2"]}
+
+    client = _api_client()
+
+    with (
+        patch("local_deepl.utils.security.socket.getaddrinfo", side_effect=_public_dns),
+        patch("local_deepl.api.routers.ocr.OCRPipeline", _FailingDummyPipeline),
+        patch("local_deepl.api.routers.ocr.HybridAligner"),
+        patch("local_deepl.api.routers.ocr.PDFHandler"),
+    ):
+        response = client.post(
+            "/process",
+            data=_process_form(),
+            files={"file": _pdf_upload()},
+        )
+
+    assert response.status_code == 200
+    assert response.headers.get("X-Failed-Pages") == "1"
+
+    # The job record reflects the partial failure.
+    jobs = client.get("/api/jobs").json()
+    assert jobs, "no job history recorded"
+    latest = jobs[0]
+    assert latest["status"] == "complete"
+    assert latest["failed_pages"] == [1]
+
+
+def test_websocket_manager_emits_warning_flag():
+    """The ConnectionManager.send_progress path must serialize the
+    ``warning`` flag in the WebSocket frame so the UI can render a
+    partial-failure indicator without parsing the message text."""
+    from local_deepl.api.routers.websocket import ConnectionManager
+
+    sent_frames: list[dict] = []
+
+    class _StubWS:
+        async def accept(self):
+            pass
+
+        async def send_json(self, payload):
+            sent_frames.append(payload)
+
+    async def _drive():
+        manager = ConnectionManager()
+        await manager.connect(_StubWS(), "abcd" * 8, "efgh" * 8)  # 32-char tokens
+        await manager.send_progress("abcd" * 8, "all good", 50, stage="ocr")
+        await manager.send_progress(
+            "abcd" * 8,
+            "OCR failed for page 7: TimeoutError",
+            0,
+            stage="ocr",
+            warning=True,
+        )
+
+    asyncio.run(_drive())
+
+    assert sent_frames[0] == {
+        "status": "all good",
+        "percent": 50,
+        "stage": "ocr",
+    }
+    assert sent_frames[1] == {
+        "status": "OCR failed for page 7: TimeoutError",
+        "percent": 0,
+        "stage": "ocr",
+        "warning": True,
+    }
 
 
 def test_translate_error_response_does_not_expose_internal_exception():

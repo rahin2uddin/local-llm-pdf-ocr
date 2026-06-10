@@ -19,6 +19,7 @@ from local_deepl.pipeline import (
     _is_refinable,
     parse_page_range,
 )
+from tests.conftest import _StubOCR
 
 
 def _make_tiny_b64_image() -> str:
@@ -369,3 +370,81 @@ class TestOCRPipeline:
         assert captured.get("called") is True
         assert captured["dpi"] == 250
         assert 0 in captured["pages"]
+
+    async def test_per_page_failure_records_last_failed_pages_and_invokes_warning(
+        self, stub_ocr
+    ):
+        """A page whose OCR call raises must land in last_failed_pages and
+        trigger the on_warning callback exactly once; the surviving pages
+        still produce a result and the PDF is still written."""
+
+        class _FailingPageOCR(_StubOCR):
+            def __init__(self):
+                super().__init__()
+                self.calls: list[int] = []
+                self._counter = 0
+
+            async def perform_ocr(self, image_base64, **kwargs):
+                idx = self._counter
+                self._counter += 1
+                self.calls.append(idx)
+                # Page 1 (the second call) fails. Pages 0 and 2 succeed.
+                if idx == 1:
+                    raise RuntimeError("simulated OCR timeout")
+                return list(self.page_lines)
+
+        warnings: list[tuple[int, BaseException]] = []
+
+        async def on_warning(page_index, exc):
+            warnings.append((page_index, exc))
+
+        ocr = _FailingPageOCR()
+        pdf = _StubPDF(n_pages=3)
+        pipe = OCRPipeline(_StubAligner(), ocr, pdf)
+
+        result = await pipe.run(
+            "in.pdf", "out.pdf", concurrency=1, refine=False, on_warning=on_warning
+        )
+
+        # All three pages should still appear in the result; page 1 has
+        # empty text because its OCR call raised, but the page is present.
+        assert set(result.keys()) == {0, 1, 2}
+        assert result[1] == []
+        # The pipeline recorded exactly the failed page.
+        assert pipe.last_failed_pages == [1]
+        # The on_warning callback fired exactly once for the failed page.
+        assert len(warnings) == 1
+        assert warnings[0][0] == 1
+        assert isinstance(warnings[0][1], RuntimeError)
+        assert "simulated OCR timeout" in str(warnings[0][1])
+        # The PDF writer still ran with the surviving pages' data.
+        assert pdf.last_pages is not None
+        assert set(pdf.last_pages.keys()) == {0, 1, 2}
+
+    async def test_per_page_failure_resets_last_failed_pages_per_run(self, stub_ocr):
+        """A second run on the same pipeline instance must not see the
+        first run's failures — last_failed_pages is reset at run() entry."""
+
+        class _FailingPageOCR(_StubOCR):
+            def __init__(self):
+                super().__init__()
+                self._counter = 0
+
+            async def perform_ocr(self, image_base64, **kwargs):
+                self._counter += 1
+                if self._counter == 1:
+                    raise RuntimeError("first run page 0 fails")
+                return list(self.page_lines)
+
+        ocr = _FailingPageOCR()
+        pdf = _StubPDF(n_pages=1)
+        pipe = OCRPipeline(_StubAligner(), ocr, pdf)
+
+        # First run: page 0 fails.
+        await pipe.run("in.pdf", "out-1.pdf", concurrency=1, refine=False)
+        assert pipe.last_failed_pages == [0]
+
+        # Second run: same pipeline, but the stub's counter has moved on,
+        # so this run is all-success. last_failed_pages must reset.
+        await pipe.run("in.pdf", "out-2.pdf", concurrency=1, refine=False)
+        assert pipe.last_failed_pages == []
