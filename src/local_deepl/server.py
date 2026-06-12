@@ -65,7 +65,15 @@ def create_app() -> ASGIApplication:
     fastapi = _load_optional_module("fastapi")
     staticfiles = _load_optional_module("fastapi.staticfiles")
 
-    from local_deepl.api.routers import config, ocr, websocket
+    from local_deepl.api.routers import (
+        artifacts,
+        config,
+        extraction,
+        jobs,
+        ocr,
+        translation,
+        websocket,
+    )
 
     web_app = fastapi.FastAPI()
     web_app.mount(
@@ -77,6 +85,10 @@ def create_app() -> ASGIApplication:
     web_app.include_router(config.router)
     web_app.include_router(ocr.router)
     web_app.include_router(websocket.router)
+    web_app.include_router(jobs.router)
+    web_app.include_router(artifacts.router)
+    web_app.include_router(translation.router)
+    web_app.include_router(extraction.router)
     web_app.get("/")(read_index)
 
     return cast(ASGIApplication, web_app)

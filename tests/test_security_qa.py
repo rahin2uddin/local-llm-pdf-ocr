@@ -126,9 +126,9 @@ def test_celery_task_raises_value_error_on_translation_error():
 
 def test_extract_data_robust_json_parsing():
     pytest.importorskip("fastapi")
-    from local_deepl.api.routers import ocr
+    from local_deepl.api.routers import extraction
 
-    # Verify our custom regex fallback in ocr.py doesn't crash when JSON matches are missing or fail
+    # Verify our custom regex fallback in extraction.py doesn't crash when JSON matches are missing or fail
     async def mock_acompletion(*args, **kwargs):
         return SimpleNamespace(
             choices=[
@@ -139,8 +139,8 @@ def test_extract_data_robust_json_parsing():
         )
 
     with (
-        patch.object(ocr.json, "loads") as mock_loads,
-        patch.object(ocr.re, "search") as mock_search,
+        patch.object(extraction.json, "loads") as mock_loads,
+        patch.object(extraction.re, "search") as mock_search,
         patch("litellm.acompletion", mock_acompletion),
     ):
         mock_loads.side_effect = json.JSONDecodeError("JSON Decode Error", "", 0)
@@ -152,7 +152,7 @@ def test_extract_data_robust_json_parsing():
                 (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("104.18.3.161", 443))
             ]
             response = asyncio.run(
-                ocr.extract_data(
+                extraction.extract_data(
                     {
                         "text": "Hello World",
                         "template": "invoice",

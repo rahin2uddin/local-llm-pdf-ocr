@@ -15,7 +15,7 @@ pytest.importorskip("fastapi")
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from local_deepl.api.routers import ai, config, ocr, websocket
+from local_deepl.api.routers import ai, config, ocr, websocket, jobs, artifacts, translation, extraction, state
 from local_deepl.api.services.artifacts import TextArtifactStore
 from local_deepl.api.services.security import (
     UploadValidationError,
@@ -44,6 +44,10 @@ def _api_client() -> TestClient:
     app.include_router(ai.router)
     app.include_router(ocr.router)
     app.include_router(websocket.router)
+    app.include_router(jobs.router)
+    app.include_router(artifacts.router)
+    app.include_router(translation.router)
+    app.include_router(extraction.router)
     return TestClient(app)
 
 
@@ -208,10 +212,10 @@ def test_text_artifact_retrieval_expires_router_store(tmp_path):
     def now() -> float:
         return clock.value
 
-    original_store = ocr._text_artifacts
+    original_store = state.text_artifacts
     try:
         store = TextArtifactStore(ttl_seconds=5, clock=now, artifact_dir=tmp_path)
-        ocr._text_artifacts = store
+        state.text_artifacts = store
         handle = store.create({0: ["expiring text"]})
         client = _api_client()
 
@@ -229,7 +233,7 @@ def test_text_artifact_retrieval_expires_router_store(tmp_path):
         assert response.status_code == 404
         assert not Path(handle.path).exists()
     finally:
-        ocr._text_artifacts = original_store
+        state.text_artifacts = original_store
 
 
 def test_process_omits_document_metadata_artifact_when_no_report(tmp_path: Path):
@@ -242,10 +246,10 @@ def test_process_omits_document_metadata_artifact_when_no_report(tmp_path: Path)
             Path(output_path).write_bytes(b"%PDF-1.4\n%%EOF\n")
             return {0: ["safe text"]}
 
-    original_text_store = ocr._text_artifacts
-    original_metadata_store = ocr._metadata_artifacts
-    ocr._text_artifacts = TextArtifactStore(artifact_dir=tmp_path / "text")
-    ocr._metadata_artifacts = TextArtifactStore(artifact_dir=tmp_path / "metadata")
+    original_text_store = state.text_artifacts
+    original_metadata_store = state.metadata_artifacts
+    state.text_artifacts = TextArtifactStore(artifact_dir=tmp_path / "text")
+    state.metadata_artifacts = TextArtifactStore(artifact_dir=tmp_path / "metadata")
 
     try:
         client = _api_client()
@@ -267,8 +271,8 @@ def test_process_omits_document_metadata_artifact_when_no_report(tmp_path: Path)
         assert "X-Document-Metadata-Artifact-Id" not in response.headers
         assert "X-Document-Metadata-Artifact-Token" not in response.headers
     finally:
-        ocr._text_artifacts = original_text_store
-        ocr._metadata_artifacts = original_metadata_store
+        state.text_artifacts = original_text_store
+        state.metadata_artifacts = original_metadata_store
 
 
 def test_process_exposes_token_bound_document_metadata_artifact(tmp_path: Path):
@@ -316,10 +320,10 @@ def test_process_exposes_token_bound_document_metadata_artifact(tmp_path: Path):
             self.last_document_result = document
             return {0: ["safe text"]}
 
-    original_text_store = ocr._text_artifacts
-    original_metadata_store = ocr._metadata_artifacts
-    ocr._text_artifacts = TextArtifactStore(artifact_dir=tmp_path / "text")
-    ocr._metadata_artifacts = TextArtifactStore(artifact_dir=tmp_path / "metadata")
+    original_text_store = state.text_artifacts
+    original_metadata_store = state.metadata_artifacts
+    state.text_artifacts = TextArtifactStore(artifact_dir=tmp_path / "text")
+    state.metadata_artifacts = TextArtifactStore(artifact_dir=tmp_path / "metadata")
 
     try:
         client = _api_client()
@@ -364,18 +368,18 @@ def test_process_exposes_token_bound_document_metadata_artifact(tmp_path: Path):
         assert block_report["metadata"]["structure"]["kind"] == "heading"
         assert "text" not in block_report
     finally:
-        ocr._text_artifacts = original_text_store
-        ocr._metadata_artifacts = original_metadata_store
+        state.text_artifacts = original_text_store
+        state.metadata_artifacts = original_metadata_store
 
 
 def test_document_export_artifact_is_token_bound(tmp_path: Path):
-    original_text_store = ocr._text_artifacts
-    original_export_store = ocr._export_artifacts
-    ocr._text_artifacts = TextArtifactStore(artifact_dir=tmp_path / "text")
-    ocr._export_artifacts = TextArtifactStore(artifact_dir=tmp_path / "export")
+    original_text_store = state.text_artifacts
+    original_export_store = state.export_artifacts
+    state.text_artifacts = TextArtifactStore(artifact_dir=tmp_path / "text")
+    state.export_artifacts = TextArtifactStore(artifact_dir=tmp_path / "export")
 
     try:
-        handle = ocr._text_artifacts.create({0: ["alpha", "beta"]})
+        handle = state.text_artifacts.create({0: ["alpha", "beta"]})
         client = _api_client()
         response = client.post(
             "/api/export/document",
@@ -401,8 +405,8 @@ def test_document_export_artifact_is_token_bound(tmp_path: Path):
         assert exported.status_code == 200
         assert exported.text.startswith("## Page 1")
     finally:
-        ocr._text_artifacts = original_text_store
-        ocr._export_artifacts = original_export_store
+        state.text_artifacts = original_text_store
+        state.export_artifacts = original_export_store
 
 
 def test_progress_session_uses_token_bound_websocket_channels():

@@ -319,11 +319,10 @@ def test_pipeline_rejects_hybrid_run_without_aligner_or_ocr(
     example_pdfs: dict[str, Path], tmp_path: Path
 ):
     """Hybrid path needs both `aligner` and `ocr_processor`. If a user forgets
-    to pass either (and doesn't supply a grounded backend), `run()` should
-    raise an explicit ValueError — not a later AttributeError on None."""
-    pipe = OCRPipeline(pdf_handler=PDFHandler())  # no aligner, no ocr
+    to pass either (and doesn't supply a grounded backend), `OCRPipeline`
+    initialization should raise an explicit ValueError."""
     with pytest.raises(ValueError, match="Hybrid pipeline requires"):
-        asyncio.run(pipe.run(str(example_pdfs["digital.pdf"]), str(tmp_path / "x.pdf")))
+        OCRPipeline(pdf_handler=PDFHandler())  # no aligner, no ocr
 
 
 def test_grounded_path_forwards_progress_callback(
